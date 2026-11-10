@@ -6,6 +6,7 @@
   const HALF = 550; // the loaded map is a square of 2 * HALF metres
 
   const CITIES = [
+    { name: 'Bern', lat: 46.9480, lon: 7.4474 },
     { name: 'Berlin', lat: 52.5163, lon: 13.3777 },
     { name: 'Paris', lat: 48.8738, lon: 2.2950 },
     { name: 'London', lat: 51.5079, lon: -0.1281 },
