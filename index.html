@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#1c1260">
+<title>Grand Martin Auto</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bungee&family=Rubik:wght@500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  /* Arcade cabinet: deep indigo night, loud candy accents, thick ink outlines, hard drop shadows. One theme by choice. */
+  --night: #1c1260;
+  --night-2: #2b1c8f;
+  --ink: #0c0830;
+  --sun: #ffd23f;
+  --hot: #ff3d7f;
+  --mint: #2ee6a6;
+  --sky: #45c8ff;
+  --paper: #fff8e7;
+  --sign: #14915a;
+  --font-display: 'Bungee', 'Arial Black', Impact, sans-serif;
+  --font-body: 'Rubik', 'Trebuchet MS', Verdana, sans-serif;
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--night); color: var(--paper); font-family: var(--font-body); font-weight: 500;
+  overflow: hidden; overscroll-behavior: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+}
+button, input { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 3px solid var(--sky); outline-offset: 3px; }
+[hidden] { display: none !important; }
+
+#view { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; background: #9fdcff; }
+
+/* ---------- shared arcade pieces ---------- */
+.btn {
+  font-family: var(--font-display); letter-spacing: .02em; color: var(--ink); background: var(--sun);
+  border: 3px solid var(--ink); border-radius: 14px; padding: 10px 16px; box-shadow: 0 5px 0 var(--ink);
+  transition: transform .06s, box-shadow .06s; touch-action: manipulation;
+}
+.btn:active, .btn.on { transform: translateY(4px); box-shadow: 0 1px 0 var(--ink); }
+.btn.pink { background: var(--hot); color: #fff; }
+.btn.mint { background: var(--mint); }
+.btn.sky { background: var(--sky); }
+.btn.ghost { background: var(--paper); }
+.plate {
+  background: var(--night); border: 3px solid var(--ink); border-radius: 14px; box-shadow: 0 4px 0 var(--ink);
+}
+
+/* ---------- menu ---------- */
+#menu {
+  position: fixed; inset: 0; z-index: 20; overflow-y: auto; -webkit-overflow-scrolling: touch;
+  padding: calc(18px + var(--sat)) calc(16px + var(--sar)) calc(22px + var(--sab)) calc(16px + var(--sal));
+  background: radial-gradient(circle at 50% -10%, var(--night-2), var(--night) 60%);
+}
+#menu::before {
+  content: ""; position: fixed; left: 50%; top: -60vmax; width: 200vmax; height: 200vmax; margin-left: -100vmax; z-index: -1;
+  background: repeating-conic-gradient(from 0deg, rgba(255,255,255,.055) 0 9deg, transparent 9deg 18deg);
+  animation: spin 90s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.menu-in { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }
+.logo { text-align: center; line-height: .92; margin: 4px 0 0; font-family: var(--font-display); font-weight: 400; text-wrap: balance; }
+.logo span { display: block; }
+.logo .l1 { font-size: clamp(22px, 6vw, 40px); color: var(--sky); text-shadow: 0 3px 0 var(--ink); }
+.logo .l2 {
+  font-size: clamp(44px, 13vw, 96px); color: var(--sun); -webkit-text-stroke: 3px var(--ink); paint-order: stroke fill;
+  text-shadow: 0 6px 0 var(--hot), 0 10px 0 var(--ink); transform: rotate(-3deg); margin: 4px 0 10px;
+}
+.logo .l3 { font-size: clamp(22px, 6vw, 40px); color: var(--paper); text-shadow: 0 3px 0 var(--ink); }
+.tag { text-align: center; margin: 0; font-weight: 700; color: var(--mint); font-size: 17px; }
+.card { padding: 14px; display: flex; flex-direction: column; gap: 12px; background: rgba(12, 8, 48, .72); }
+.step { display: flex; align-items: center; gap: 10px; margin: 0; font-family: var(--font-display); font-size: 17px; font-weight: 400; }
+.step b {
+  display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: var(--hot); color: #fff;
+  border: 3px solid var(--ink); font-weight: 400; flex: none;
+}
+.cars { display: flex; flex-wrap: wrap; gap: 10px; }
+.car-opt { position: relative; }
+.car-opt input { position: absolute; opacity: 0; inset: 0; }
+.car-opt label {
+  display: block; width: 78px; padding: 8px 6px 4px; border-radius: 12px; border: 3px solid var(--ink); background: var(--night-2);
+  box-shadow: 0 4px 0 var(--ink); cursor: pointer; text-align: center; font-size: 12px; font-weight: 700;
+}
+.car-opt svg { display: block; width: 100%; height: auto; }
+.car-opt input:checked + label { background: var(--paper); color: var(--ink); transform: translateY(-3px) rotate(-2deg); box-shadow: 0 7px 0 var(--ink); }
+.car-opt input:focus-visible + label { outline: 3px solid var(--sky); outline-offset: 3px; }
+.search { display: flex; gap: 10px; }
+.search input {
+  flex: 1; min-width: 0; padding: 12px 14px; border-radius: 14px; border: 3px solid var(--ink); background: var(--paper); color: var(--ink);
+  font-weight: 700; font-size: 17px; -webkit-user-select: text; user-select: text;
+}
+.search input::placeholder { color: #7a7596; }
+.cities { display: flex; flex-wrap: wrap; gap: 10px; }
+.cities .btn { font-size: 14px; padding: 9px 13px; }
+.best { margin: 0; text-align: center; font-weight: 700; color: var(--sun); }
+.fine { margin: 0; text-align: center; font-size: 13px; color: #b9b3e6; }
+.fine a { color: var(--sky); }
+.keys { margin: 0; text-align: center; font-size: 14px; color: #d6d1f5; }
+kbd { font-family: var(--font-body); font-weight: 700; background: var(--paper); color: var(--ink); border-radius: 6px; padding: 1px 6px; border-bottom: 3px solid #b9b3a0; }
+
+/* ---------- loading and messages ---------- */
+#loading, #pause, #win { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; padding: 20px; background: rgba(12, 8, 48, .82); }
+.box { width: min(420px, 100%); padding: 22px 18px; text-align: center; display: flex; flex-direction: column; gap: 14px; align-items: center; }
+.box h2 { margin: 0; font-family: var(--font-display); font-weight: 400; font-size: 26px; color: var(--sun); text-shadow: 0 3px 0 var(--ink); text-wrap: balance; }
+.box p { margin: 0; font-size: 16px; }
+.wheel { width: 76px; height: 76px; animation: spin 1s linear infinite; }
+.row { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+#win h2 { font-size: 34px; }
+#win .big { font-family: var(--font-display); font-size: 22px; color: var(--mint); }
+
+/* ---------- HUD ---------- */
+#hud { position: fixed; inset: 0; z-index: 10; pointer-events: none; }
+#hud > * { position: absolute; }
+#mini {
+  left: calc(10px + var(--sal)); top: calc(10px + var(--sat)); width: 128px; height: 128px; border-radius: 18px;
+  border: 4px solid var(--ink); box-shadow: 0 4px 0 var(--ink); background: #2a2d45;
+}
+#sign {
+  left: 50%; top: calc(10px + var(--sat)); transform: translateX(-50%); max-width: calc(100% - 320px); min-width: 120px;
+  background: var(--sign); color: #fff; border: 3px solid #fff; outline: 3px solid var(--ink); border-radius: 10px;
+  padding: 5px 14px; font-weight: 700; font-size: 16px; text-align: center; line-height: 1.15;
+}
+#sign small { display: block; font-size: 11px; opacity: .85; font-weight: 500; text-transform: uppercase; letter-spacing: .08em; }
+#seek {
+  left: 50%; top: calc(70px + var(--sat)); transform: translateX(-50%); display: flex; align-items: center; gap: 8px;
+  padding: 4px 12px 4px 6px; border-radius: 999px; font-family: var(--font-display); font-size: 14px; color: var(--sun);
+}
+#seek svg { width: 30px; height: 30px; transition: transform .12s linear; }
+#score {
+  right: calc(10px + var(--sar)); top: calc(10px + var(--sat)); display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
+}
+.pill { padding: 5px 12px; font-family: var(--font-display); font-size: 18px; display: flex; align-items: center; gap: 8px; font-variant-numeric: tabular-nums; }
+.pill small { font-family: var(--font-body); font-weight: 700; font-size: 11px; letter-spacing: .1em; color: var(--sky); }
+#stars { color: var(--sun); }
+#stars.pop { animation: pop .35s; }
+@keyframes pop { 40% { transform: scale(1.35) rotate(-6deg); } }
+#btn-pause { pointer-events: auto; padding: 6px 12px; font-size: 14px; }
+#speedo { left: 50%; bottom: calc(8px + var(--sab)); transform: translateX(-50%); width: 132px; }
+#speedo svg { display: block; width: 100%; height: auto; }
+#needle { transform-origin: 60px 60px; transition: transform .1s linear; }
+#toast {
+  left: 50%; top: 34%; transform: translate(-50%, -50%) scale(.6); opacity: 0; transition: transform .18s, opacity .18s; white-space: nowrap;
+  font-family: var(--font-display); font-size: clamp(22px, 6vw, 40px); color: var(--sun); -webkit-text-stroke: 2px var(--ink); paint-order: stroke fill;
+  text-shadow: 0 4px 0 var(--ink);
+}
+#toast.show { transform: translate(-50%, -50%) scale(1) rotate(-3deg); opacity: 1; }
+
+/* touch controls */
+#pad { inset: 0; }
+#pad .btn { position: absolute; pointer-events: auto; touch-action: none; display: grid; place-items: center; padding: 0; border-radius: 22px; }
+#pad svg { width: 46%; height: 46%; }
+#t-left { left: calc(14px + var(--sal)); bottom: calc(18px + var(--sab)); width: 84px; height: 84px; }
+#t-right { left: calc(110px + var(--sal)); bottom: calc(18px + var(--sab)); width: 84px; height: 84px; }
+#t-go { right: calc(14px + var(--sar)); bottom: calc(18px + var(--sab)); width: 96px; height: 110px; font-size: 24px; }
+#t-back { right: calc(122px + var(--sar)); bottom: calc(18px + var(--sab)); width: 76px; height: 76px; font-size: 13px; }
+#t-horn { right: calc(14px + var(--sar)); bottom: calc(142px + var(--sab)); width: 96px; height: 48px; font-size: 14px; border-radius: 14px; }
+body.touch #speedo { width: 104px; }
+body:not(.touch) #pad { display: none; }
+
+#confetti { position: fixed; inset: 0; z-index: 40; pointer-events: none; overflow: hidden; }
+#confetti i { position: absolute; top: -20px; width: 12px; height: 18px; border: 2px solid var(--ink); animation: fall linear forwards; }
+@keyframes fall { to { transform: translateY(110vh) rotate(720deg); } }
+
+@media (max-width: 560px) {
+  #mini { width: 96px; height: 96px; border-radius: 14px; }
+  #sign { max-width: calc(100% - 236px); font-size: 13px; padding: 4px 8px; min-width: 0; }
+  .pill { font-size: 15px; padding: 4px 9px; }
+  #seek { top: calc(64px + var(--sat)); }
+  #t-left, #t-right { width: 68px; height: 68px; }
+  #t-right { left: calc(90px + var(--sal)); }
+  #t-go { width: 84px; height: 96px; }
+  #t-back { right: calc(106px + var(--sar)); width: 64px; height: 64px; font-size: 11px; }
+  #t-horn { width: 84px; bottom: calc(126px + var(--sab)); }
+  body.touch #speedo { bottom: calc(132px + var(--sab)); }
+}
+@media (max-height: 420px) {
+  #t-go { height: 92px; } #t-horn { bottom: calc(122px + var(--sab)); height: 40px; }
+  #speedo { width: 92px !important; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #menu::before, .wheel { animation: none; }
+  #confetti { display: none; }
+}
+</style>
+</head>
+<body>
+<canvas id="view" aria-label="3D view of the city from behind your car"></canvas>
+
+<!-- ============ HUD ============ -->
+<div id="hud" hidden>
+  <canvas id="mini" width="256" height="256" aria-label="Map of the area"></canvas>
+  <div id="sign"><small id="sign-city">City</small><span id="sign-street">Off road</span></div>
+  <div id="seek" class="plate" aria-label="Direction to the nearest star">
+    <svg id="seek-arrow" viewBox="0 0 30 30"><circle cx="15" cy="15" r="13" fill="#0c0830"/><path d="M15 4l8 16-8-4-8 4z" fill="#ffd23f"/></svg>
+    <span id="seek-dist">0 m</span>
+  </div>
+  <div id="score">
+    <div class="pill plate" id="stars"><svg width="22" height="22" viewBox="0 0 24 24"><path d="M12 1.5l3.2 7 7.6.8-5.7 5.1 1.7 7.5L12 18l-6.8 3.9 1.7-7.5L1.2 9.3l7.6-.8z" fill="#ffd23f" stroke="#0c0830" stroke-width="1.6" stroke-linejoin="round"/></svg><span id="stars-n">0/5</span></div>
+    <div class="pill plate"><small>LEVEL</small><span id="level-n">1</span></div>
+    <div class="pill plate"><small>SCORE</small><span id="score-n">0</span></div>
+    <button class="btn ghost" id="btn-pause" type="button">PAUSE</button>
+  </div>
+  <div id="speedo" aria-hidden="true">
+    <svg viewBox="0 0 120 94">
+      <path d="M15.1 90A54 54 0 1 1 104.9 90z" fill="#1c1260" stroke="#0c0830" stroke-width="4" stroke-linejoin="round"/>
+      <path d="M23.6 81A42 42 0 0 1 60 18" fill="none" stroke="#2ee6a6" stroke-width="7"/>
+      <path d="M60 18a42 42 0 0 1 29.7 12.3" fill="none" stroke="#ffd23f" stroke-width="7"/>
+      <path d="M89.7 30.3A42 42 0 0 1 96.4 81" fill="none" stroke="#ff3d7f" stroke-width="7"/>
+      <g id="needle"><path d="M60 60L60 24" stroke="#fff8e7" stroke-width="4" stroke-linecap="round"/></g>
+      <circle cx="60" cy="60" r="6" fill="#fff8e7" stroke="#0c0830" stroke-width="3"/>
+      <text id="kmh" x="60" y="89" text-anchor="middle" font-family="Bungee, Arial Black, sans-serif" font-size="15" fill="#fff8e7">0</text>
+      <text x="60" y="75" text-anchor="middle" font-family="Rubik, sans-serif" font-weight="700" font-size="7" fill="#45c8ff">KM/H</text>
+    </svg>
+  </div>
+  <div id="pad">
+    <button class="btn sky" id="t-left" data-key="left" type="button" aria-label="Steer left"><svg viewBox="0 0 24 24"><path d="M15 3L5 12l10 9z" fill="#0c0830"/></svg></button>
+    <button class="btn sky" id="t-right" data-key="right" type="button" aria-label="Steer right"><svg viewBox="0 0 24 24"><path d="M9 3l10 9-10 9z" fill="#0c0830"/></svg></button>
+    <button class="btn ghost" id="t-horn" data-key="horn" type="button">HORN</button>
+    <button class="btn pink" id="t-back" data-key="down" type="button">BRAKE</button>
+    <button class="btn mint" id="t-go" data-key="up" type="button">GO</button>
+  </div>
+  <div id="toast" role="status"></div>
+</div>
+
+<!-- ============ MENU ============ -->
+<main id="menu">
+  <div class="menu-in">
+    <h1 class="logo"><span class="l1">Grand</span><span class="l2">Martin</span><span class="l3">Auto</span></h1>
+    <p class="tag">Real streets. Your car. Find the stars!</p>
+
+    <section class="plate card" aria-labelledby="s1">
+      <h2 class="step" id="s1"><b>1</b> Pick your car</h2>
+      <div class="cars" id="cars" role="radiogroup" aria-labelledby="s1"></div>
+    </section>
+
+    <section class="plate card" aria-labelledby="s2">
+      <h2 class="step" id="s2"><b>2</b> Pick a place to drive</h2>
+      <form class="search" id="search">
+        <input id="city" name="city" type="text" autocomplete="off" autocapitalize="words" enterkeyhint="go" placeholder="Any city, street or landmark" aria-label="City, street or landmark">
+        <button class="btn pink" id="btn-search" type="submit">GO!</button>
+      </form>
+      <div class="cities" id="cities"></div>
+    </section>
+
+    <p class="best" id="best" hidden></p>
+    <p class="keys" id="keys">Drive with <kbd>&larr;</kbd> <kbd>&uarr;</kbd> <kbd>&darr;</kbd> <kbd>&rarr;</kbd> or <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd>. <kbd>Space</kbd> brakes, <kbd>H</kbd> honks, <kbd>P</kbd> pauses.</p>
+    <p class="fine">Streets and buildings come live from <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">&copy; OpenStreetMap contributors</a>.</p>
+  </div>
+</main>
+
+<div id="loading" hidden>
+  <div class="plate box">
+    <svg class="wheel" id="load-wheel" viewBox="0 0 80 80" aria-hidden="true">
+      <circle cx="40" cy="40" r="34" fill="#0c0830"/><circle cx="40" cy="40" r="20" fill="#fff8e7" stroke="#0c0830" stroke-width="4"/>
+      <path d="M40 22v36M22 40h36M27 27l26 26M53 27L27 53" stroke="#0c0830" stroke-width="5" stroke-linecap="round"/>
+      <circle cx="40" cy="40" r="6" fill="#ff3d7f" stroke="#0c0830" stroke-width="3"/>
+    </svg>
+    <h2 id="load-title">Loading</h2>
+    <p id="load-text">Fetching the real streets</p>
+    <div class="row" id="load-actions" hidden>
+      <button class="btn ghost" id="btn-back" type="button">BACK</button>
+      <button class="btn mint" id="btn-practice" type="button">PRACTICE TOWN</button>
+    </div>
+  </div>
+</div>
+
+<div id="pause" hidden>
+  <div class="plate box">
+    <h2>Paused</h2>
+    <div class="row">
+      <button class="btn mint" id="btn-resume" type="button">KEEP DRIVING</button>
+      <button class="btn sky" id="btn-sound" type="button">SOUND: ON</button>
+      <button class="btn pink" id="btn-newcity" type="button">NEW CITY</button>
+    </div>
+  </div>
+</div>
+
+<div id="win" hidden>
+  <div class="plate box">
+    <h2 id="win-title">Level 1 done!</h2>
+    <p class="big" id="win-score">+500</p>
+    <p id="win-text">You found every star.</p>
+    <button class="btn mint" id="btn-next" type="button">NEXT LEVEL</button>
+  </div>
+</div>
+
+<div id="confetti" aria-hidden="true"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="js/core.js"></script>
+<script src="js/game.js"></script>
+</body>
+</html>
