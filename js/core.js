@@ -83,6 +83,179 @@
     return w;
   }
 
+
+  // ---------- vector tiles (OpenMapTiles schema, e.g. OpenFreeMap) ----------
+  function decodeMVT(buf) {
+    let pos = 0;
+    const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength), td = new TextDecoder();
+    const vi = () => { let r = 0, m = 1, b; do { b = buf[pos++]; r += (b & 127) * m; m *= 128; } while ((b & 128) && pos < buf.length); return r; };
+    const skip = w => {
+      if (w === 0) vi(); else if (w === 1) pos += 8; else if (w === 2) { const l = vi(); pos += l; } else if (w === 5) pos += 4; else throw new Error('bad tile');
+    };
+    const str = () => { const l = vi(), v = td.decode(buf.subarray(pos, pos + l)); pos += l; return v; };
+    const packed = (w, out) => { if (w === 2) { const e = vi() + pos; while (pos < e) out.push(vi()); } else out.push(vi()); };
+    const layers = {};
+    while (pos < buf.length) {
+      const k = vi();
+      if (Math.floor(k / 8) !== 3 || (k & 7) !== 2) { skip(k & 7); continue; }
+      const lend = vi() + pos, L = { name: '', extent: 4096, keys: [], values: [], feats: [] };
+      while (pos < lend) {
+        const k2 = vi(), f = Math.floor(k2 / 8), w = k2 & 7;
+        if (f === 1 && w === 2) L.name = str();
+        else if (f === 2 && w === 2) {
+          const fend = vi() + pos, F = { type: 0, tags: [], geom: [] };
+          while (pos < fend) {
+            const k3 = vi(), f3 = Math.floor(k3 / 8), w3 = k3 & 7;
+            if (f3 === 2) packed(w3, F.tags); else if (f3 === 3 && w3 === 0) F.type = vi(); else if (f3 === 4) packed(w3, F.geom); else skip(w3);
+          }
+          pos = fend; L.feats.push(F);
+        } else if (f === 3 && w === 2) L.keys.push(str());
+        else if (f === 4 && w === 2) {
+          const vend = vi() + pos; let val = null;
+          while (pos < vend) {
+            const k4 = vi(), f4 = Math.floor(k4 / 8), w4 = k4 & 7;
+            if (f4 === 1 && w4 === 2) val = str();
+            else if (f4 === 2 && w4 === 5) { val = dv.getFloat32(pos, true); pos += 4; }
+            else if (f4 === 3 && w4 === 1) { val = dv.getFloat64(pos, true); pos += 8; }
+            else if ((f4 === 4 || f4 === 5) && w4 === 0) val = vi();
+            else if (f4 === 6 && w4 === 0) { const n = vi(); val = n % 2 ? -(n + 1) / 2 : n / 2; }
+            else if (f4 === 7 && w4 === 0) val = !!vi();
+            else skip(w4);
+          }
+          pos = vend; L.values.push(val);
+        } else if (f === 5 && w === 0) L.extent = vi();
+        else skip(w);
+      }
+      pos = lend; layers[L.name] = L;
+    }
+    return layers;
+  }
+
+  function mvtRings(F) {
+    const g = F.geom, out = [], zz = n => (n % 2 ? -(n + 1) / 2 : n / 2);
+    let x = 0, y = 0, i = 0, cur = null;
+    while (i < g.length) {
+      const c = g[i++], cmd = c & 7, n = c >> 3;
+      if (cmd === 1) for (let k = 0; k < n && i + 1 < g.length; k++) { x += zz(g[i++]); y += zz(g[i++]); if (cur) out.push(cur); cur = [[x, y]]; }
+      else if (cmd === 2) for (let k = 0; k < n && i + 1 < g.length; k++) { x += zz(g[i++]); y += zz(g[i++]); if (cur) cur.push([x, y]); }
+      else if (cmd !== 7) break;
+    }
+    if (cur) out.push(cur);
+    return out;
+  }
+
+  function tileList(lat, lon, half, z) {
+    const n = Math.pow(2, z), dLat = half / 110540, dLon = half / (111320 * Math.cos(lat * Math.PI / 180));
+    const tx = l => Math.floor((l + 180) / 360 * n);
+    const ty = l => { const r = l * Math.PI / 180; return Math.floor((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * n); };
+    const out = [];
+    for (let x = tx(lon - dLon); x <= tx(lon + dLon); x++)
+      for (let y = ty(lat + dLat); y <= ty(lat - dLat); y++)
+        if (y >= 0 && y < n) out.push({ z: z, x: ((x % n) + n) % n, y: y });
+    return out.slice(0, 12);
+  }
+
+  const TROAD = { motorway: [14, 1], trunk: [12, 1], primary: [11, 1], secondary: [10, 1], tertiary: [9, 1], minor: [7.5, 1], service: [4.5, 2] };
+
+  // tiles: [{z, x, y, layers}] with layers from decodeMVT
+  function worldFromTiles(tiles, lat0, lon0, half) {
+    const kx = 111320 * Math.cos(lat0 * Math.PI / 180), kz = 110540, lim = half + 150;
+    const w = { half: half, roads: [], buildings: [], areas: [], rivers: [] };
+    const names = new Map(), NC = 30, nkey = (a, b) => a * 100003 + b;
+    for (const t of tiles) {
+      const n = Math.pow(2, t.z);
+      const each = (layerName, fn) => {
+        const L = t.layers && t.layers[layerName];
+        if (!L) return;
+        const e = L.extent || 4096;
+        for (const F of L.feats) {
+          const props = {};
+          for (let i = 0; i + 1 < F.tags.length; i += 2) props[L.keys[F.tags[i]]] = L.values[F.tags[i + 1]];
+          for (const ring of mvtRings(F)) {
+            let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+            const pts = ring.map(p => {
+              const lon = (t.x + p[0] / e) / n * 360 - 180;
+              const lat = Math.atan(Math.sinh(Math.PI * (1 - 2 * (t.y + p[1] / e) / n))) * 180 / Math.PI;
+              const X = (lon - lon0) * kx, Z = -(lat - lat0) * kz;
+              if (X < x0) x0 = X; if (X > x1) x1 = X; if (Z < z0) z0 = Z; if (Z > z1) z1 = Z;
+              return [X, Z];
+            });
+            if (x0 > lim || x1 < -lim || z0 > lim || z1 < -lim) continue;
+            fn(F.type, props, pts);
+          }
+        }
+      };
+      each('transportation', (type, p, pts) => {
+        if (type !== 2 || pts.length < 2 || p.brunnel === 'tunnel') return;
+        const r = TROAD[p.class] || (p.class === 'path' && p.subclass === 'pedestrian' ? [5, 3] : null);
+        if (r) w.roads.push({ pts: pts, w: r[0], kind: r[1], name: '' });
+      });
+      each('transportation_name', (type, p, pts) => {
+        const name = p['name:latin'] || p.name;
+        if (type !== 2 || !name) return;
+        for (let i = 0; i < pts.length - 1; i++) {
+          const a = pts[i], b = pts[i + 1], len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1, steps = Math.max(1, Math.ceil(len / 12));
+          const ux = (b[0] - a[0]) / len, uz = (b[1] - a[1]) / len;
+          for (let k = 0; k <= steps; k++) {
+            const x = a[0] + (b[0] - a[0]) * k / steps, z = a[1] + (b[1] - a[1]) * k / steps;
+            const key = nkey(Math.floor(x / NC), Math.floor(z / NC)), l = names.get(key), v = [x, z, name, ux, uz];
+            if (l) l.push(v); else names.set(key, [v]);
+          }
+        }
+      });
+      each('building', (type, p, pts) => {
+        if (type !== 3 || pts.length < 3 || p.hide_3d) return;
+        const ar = polyArea(pts);
+        if (ar < 8) return; // also drops inner rings, which wind the other way
+        const id = Math.abs(Math.round(pts[0][0] * 7 + pts[0][1] * 13));
+        let h = +p.render_height;
+        if (!(h > 0)) h = 7 + (id % 5) * 2.5 + (ar > 700 ? 5 : 0);
+        w.buildings.push({ pts: pts, h: Math.max(3, Math.min(200, h)), id: id });
+      });
+      each('water', (type, p, pts) => {
+        if (type !== 3 || pts.length < 3 || p.brunnel === 'tunnel') return;
+        w.areas.push({ pts: pts, type: polyArea(pts) > 0 ? 'water' : 'land' });
+      });
+      each('waterway', (type, p, pts) => {
+        if (type === 2 && pts.length > 1 && p.brunnel !== 'tunnel') w.rivers.push({ pts: pts, w: p.class === 'river' || p.class === 'canal' ? 8 : 3 });
+      });
+      each('landcover', (type, p, pts) => {
+        if (type !== 3 || pts.length < 3 || polyArea(pts) <= 0) return;
+        if (p.class === 'wood') w.areas.push({ pts: pts, type: 'wood' });
+        else if (p.class === 'grass') w.areas.push({ pts: pts, type: 'green' });
+      });
+      each('landuse', (type, p, pts) => {
+        if (type === 3 && pts.length >= 3 && polyArea(pts) > 0 && (p.class === 'cemetery' || p.class === 'pitch' || p.class === 'playground'))
+          w.areas.push({ pts: pts, type: 'green' });
+      });
+    }
+    // water first, then land patches for islands, then greenery on top
+    const order = { water: 0, land: 1, green: 2, wood: 2 };
+    w.areas.sort((a, b) => order[a.type] - order[b.type]);
+    for (const r of w.roads) {
+      const m = r.pts.length >> 1, a = r.pts[Math.max(0, m - 1)], b = r.pts[m], e = r.pts.length - 1;
+      const dir = (p, q) => { const l = Math.hypot(q[0] - p[0], q[1] - p[1]) || 1; return [(q[0] - p[0]) / l, (q[1] - p[1]) / l]; };
+      // probe points along the road, each with the road's direction there, so crossing streets do not lend their name
+      const probes = [[[(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], dir(a, b)], [b, dir(a, b)], [r.pts[0], dir(r.pts[0], r.pts[1])], [r.pts[e], dir(r.pts[e - 1], r.pts[e])]];
+      let best = '', bd = 18;
+      for (const pr of probes) {
+        const q = pr[0], u = pr[1], cx = Math.floor(q[0] / NC), cz = Math.floor(q[1] / NC);
+        for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) {
+          const l = names.get(nkey(cx + i, cz + j));
+          if (!l) continue;
+          for (const v of l) {
+            if (Math.abs(v[3] * u[0] + v[4] * u[1]) < 0.8) continue;
+            const d = Math.hypot(v[0] - q[0], v[1] - q[1]);
+            if (d < bd) { bd = d; best = v[2]; }
+          }
+        }
+        if (best && bd < 6) break;
+      }
+      r.name = best;
+    }
+    return w;
+  }
+
   // A made-up grid town, used when no map server can be reached.
   function practiceTown() {
     const rnd = mulberry32(7);
@@ -163,7 +336,7 @@
   }
 
   const COL = {
-    green: rgb('#8fdc6c'), wood: rgb('#62c15a'), water: rgb('#4dbdff'),
+    green: rgb('#8fdc6c'), wood: rgb('#62c15a'), water: rgb('#4dbdff'), land: rgb('#e9dfc8'),
     pave: rgb('#d3cbbb'), road: rgb('#4a4d66'), service: rgb('#6c7088'), ped: rgb('#ecdfc4'), line: rgb('#ffe9a0')
   };
 
@@ -199,7 +372,8 @@
     const pos = [], col = [];
     for (const a of w.areas) {
       const p = thin(a.pts, 300), tri = triangulate(p), c = COL[a.type];
-      for (let i = 0; i < tri.length; i++) { const q = p[tri[i]]; pos.push(q[0], 0.03, q[1]); col.push(c[0], c[1], c[2]); }
+      const y = a.type === 'water' ? 0.02 : a.type === 'land' ? 0.035 : 0.05;
+      for (let i = 0; i < tri.length; i++) { const q = p[tri[i]]; pos.push(q[0], y, q[1]); col.push(c[0], c[1], c[2]); }
     }
     for (const r of w.rivers) ribbon(r.pts, r.w, 0.06, COL.water, pos, col);
     for (const r of w.roads) if (r.kind !== 3) ribbon(r.pts, r.w + 3.2, 0.09, COL.pave, pos, col);
@@ -344,7 +518,7 @@
   function placeTrees(w, rnd) {
     const out = [];
     for (const a of w.areas) {
-      if (a.type === 'water' || out.length > 600) continue;
+      if (a.type === 'water' || a.type === 'land' || out.length > 600) continue;
       let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
       for (const q of a.pts) { x0 = Math.min(x0, q[0]); x1 = Math.max(x1, q[0]); z0 = Math.min(z0, q[1]); z1 = Math.max(z1, q[1]); }
       const want = Math.min(a.type === 'wood' ? 90 : 35, Math.ceil(Math.abs(polyArea(a.pts)) / (a.type === 'wood' ? 120 : 260)));
@@ -401,7 +575,7 @@
     mulberry32: mulberry32, overpassQuery: overpassQuery, parseOSM: parseOSM, practiceTown: practiceTown,
     triangulate: triangulate, polyArea: polyArea, buildFlat: buildFlat, buildBuildings: buildBuildings,
     indexWorld: indexWorld, pickSpawn: pickSpawn, placeStars: placeStars, placeTrees: placeTrees,
-    stepCar: stepCar, MAXV: MAXV
+    stepCar: stepCar, MAXV: MAXV, decodeMVT: decodeMVT, tileList: tileList, worldFromTiles: worldFromTiles
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.GMA = api;
 })(this);

@@ -25,6 +25,8 @@
     'https://overpass.private.coffee/api/interpreter',
     'https://maps.mail.ru/osm/tools/overpass/api/interpreter'
   ];
+  const TILEJSON = 'https://tiles.openfreemap.org/planet';
+  const TILE_FALLBACK = 'https://tiles.openfreemap.org/planet/20251217_001001_pt/{z}/{x}/{y}.pbf';
   const CHEERS = ['NICE!', 'ZOOM!', 'GOT IT!', 'YES!', 'WOW!', 'SUPER!'];
 
   const store = {
@@ -109,15 +111,48 @@
     } catch (e) { failed++; }
     throw new Error(failed === 2 ? 'net' : 'notfound');
   }
+  // Overpass: ask every server at once and take the first good answer.
   async function fetchOSM(lat, lon) {
     const body = 'data=' + encodeURIComponent(C.overpassQuery(lat, lon, HALF));
-    for (const url of OVERPASS) {
+    const ask = async url => {
+      const j = await fetchJSON(url, { method: 'POST', body: body, headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }, 25000);
+      if (!j || !j.elements || !j.elements.length) throw new Error('empty');
+      return j;
+    };
+    return Promise.any(OVERPASS.map(ask));
+  }
+  // Vector tiles from OpenFreeMap: fast, hosted on a CDN, same OpenStreetMap data.
+  async function fetchTiles(lat, lon) {
+    let tpl = TILE_FALLBACK;
+    try {
+      const tj = await fetchJSON(TILEJSON, null, 8000);
+      if (tj && tj.tiles && tj.tiles[0]) tpl = tj.tiles[0];
+    } catch (e) { /* use the known tile address */ }
+    const tiles = await Promise.all(C.tileList(lat, lon, HALF, 14).map(async t => {
+      const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 20000);
       try {
-        const j = await fetchJSON(url, { method: 'POST', body: body, headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }, 35000);
-        if (j && j.elements) return j;
-      } catch (e) { /* try the next server */ }
-    }
-    throw new Error('net');
+        const r = await fetch(tpl.replace('{z}', t.z).replace('{x}', t.x).replace('{y}', t.y), { signal: ctl.signal });
+        if (r.status === 404 || r.status === 204) return Object.assign({ layers: {} }, t);
+        if (!r.ok) throw new Error('http ' + r.status);
+        const buf = new Uint8Array(await r.arrayBuffer());
+        return Object.assign({ layers: buf.length ? C.decodeMVT(buf) : {} }, t);
+      } finally { clearTimeout(timer); }
+    }));
+    return C.worldFromTiles(tiles, lat, lon, HALF);
+  }
+  async function loadWorld(lat, lon) {
+    let reached = false;
+    try {
+      const w = await fetchTiles(lat, lon);
+      if (w.roads.length >= 4) return w;
+      reached = true;
+    } catch (e) { console.warn('tiles failed', e); }
+    try {
+      const w = C.parseOSM(await fetchOSM(lat, lon), lat, lon, HALF);
+      if (w.roads.length >= 4) return w;
+      reached = true;
+    } catch (e) { console.warn('overpass failed', e); }
+    throw new Error(reached ? 'nostreets' : 'net');
   }
 
   function showLoading(title, text) {
@@ -151,11 +186,9 @@
           place = await geocode(place.query);
         }
         showLoading(place.name, 'Fetching the real streets and buildings');
-        const j = await fetchOSM(place.lat, place.lon);
+        w = await loadWorld(place.lat, place.lon);
         $('#load-text').textContent = 'Building the city';
         await new Promise(r => setTimeout(r, 30));
-        w = C.parseOSM(j, place.lat, place.lon, HALF);
-        if (w.roads.length < 4) throw new Error('nostreets');
         w.name = place.name;
       }
       C.indexWorld(w);
@@ -421,7 +454,7 @@
     const x = miniBase.getContext('2d'), k = miniScale, o = N / 2;
     x.fillStyle = '#2a2d45'; x.fillRect(0, 0, N, N);
     for (const a of w.areas) {
-      x.fillStyle = a.type === 'water' ? '#3f8fd0' : '#3f7d4f';
+      x.fillStyle = a.type === 'water' ? '#3f8fd0' : a.type === 'land' ? '#2a2d45' : '#3f7d4f';
       x.beginPath();
       a.pts.forEach((p, i) => { if (i) x.lineTo(p[0] * k + o, p[1] * k + o); else x.moveTo(p[0] * k + o, p[1] * k + o); });
       x.closePath(); x.fill();
