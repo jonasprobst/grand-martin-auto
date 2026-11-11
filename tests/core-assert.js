@@ -1,4 +1,4 @@
-// Logic tests for js/core.js. Run: node test/core.test.js
+// Logic tests for js/core.js. Run: node tests/core-assert.js
 const assert = require('assert');
 const C = require('../js/core.js');
 

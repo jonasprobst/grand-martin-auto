@@ -1,10 +1,10 @@
 // Loads the real game in headless Chrome, with real swisstopo data, and checks that every spot builds and can be driven.
-// Run: node test/browser.js [spot ...] [--shots dir]     (needs Playwright with Chromium, and network access)
+// Run: node tests/browser/real_check.js [spot ...] [--shots dir]     (needs Playwright with Chromium, and network access)
 // Exits with 1 when a spot fails to load, falls back to a simpler source, or the page throws.
 const http = require('http'), fs = require('fs'), path = require('path');
 const { chromium } = require('playwright');
 
-const root = path.join(__dirname, '..');
+const root = path.join(__dirname, '..', '..');
 const args = process.argv.slice(2), si = args.indexOf('--shots');
 const shots = si >= 0 ? args.splice(si, 2)[1] : null;
 const spots = args.length ? args : ['Altstadt', 'Bärenpark', 'Bahnhof', 'Kirchenfeld', 'Wankdorf', 'Practice Town'];

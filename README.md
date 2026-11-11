@@ -12,7 +12,7 @@ A 3D driving game for kids. Pick a car, pick a spot in Bern, and drive around it
 - Works with touch buttons on phones and tablets, and with arrow keys or WASD on a computer.
 - No build step: `index.html`, `js/core.js` (map data, geometry, car physics) and `js/game.js` (rendering, sound, game flow). three.js loads from cdnjs, its glTF and Draco loaders from jsDelivr.
 
-Tests: `node test/core.test.js` for the logic, `node test/browser.js` to load every spot with real data in headless Chrome (needs Playwright). See `docs/swisstopo-plan.md`.
+Tests: `node tests/core-assert.js` for the logic, `node tests/browser/real_check.js` to load every spot with real data in headless Chrome (needs Playwright). See `docs/swisstopo-plan.md`.
 
 Run locally with any static server, for example `python3 -m http.server`, then open http://localhost:8000.
 

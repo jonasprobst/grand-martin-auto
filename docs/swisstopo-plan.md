@@ -1,6 +1,6 @@
 # Plan: swisstopo terrain and buildings for Bern
 
-Status (11 November 2026): everything in this plan is confirmed against swisstopo's real servers in headless Chrome. All five Bern spots load swisstopo streets, terrain and building models; `node test/browser.js` checks this. The pause screen reports what loaded.
+Status (11 November 2026): everything in this plan is confirmed against swisstopo's real servers in headless Chrome. All five Bern spots load swisstopo streets, terrain and building models; `node tests/browser/real_check.js` checks this. The pause screen reports what loaded.
 
 ## Data sources (open, no key)
 
@@ -32,8 +32,8 @@ Status (11 November 2026): everything in this plan is confirmed against swisstop
 
 ## Testing
 
-- `node test/core.test.js`: logic tests for `js/core.js`, no browser or network needed.
-- `node test/browser.js [spot ...] [--shots dir]`: opens the game in headless Chrome (Playwright), loads each spot with real data, drives, pauses and returns to the menu. It fails when a spot does not load, falls back to a simpler source, or the page throws. `--shots` saves a screenshot per spot; look at them after any change to rendering.
+- `node tests/core-assert.js`: logic tests for `js/core.js`, no browser or network needed.
+- `node tests/browser/real_check.js [spot ...] [--shots dir]`: opens the game in headless Chrome (Playwright), loads each spot with real data, drives, pauses and returns to the menu. It fails when a spot does not load, falls back to a simpler source, or the page throws. `--shots` saves a screenshot per spot; look at them after any change to rendering.
 - `GMA.dev()` in the browser console returns the scene, camera, car and world, for moving the camera in tests.
 - `#terrain-test` at the end of the address plus Practice Town puts the practice streets on Bern's real terrain and houses.
 
