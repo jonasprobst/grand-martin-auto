@@ -32,11 +32,15 @@ Live at https://jonasprobst.github.io/grand-martin-auto/ (GitHub Pages serves th
 ## Tests
 
 ```
-cd tests && for f in core-*.js; do node $f; done      # print values to compare by eye, no assertions
+node tests/core-assert.js                              # logic tests with assertions
+cd tests && for f in core-*.js; do node $f; done       # the others print values to compare by eye
+NODE_PATH=$(npm root -g) node tests/browser/real_check.js --shots tests/browser/out   # every spot, real data, real three.js
 python3 tests/browser/menu_check.py                    # needs playwright and Chrome at /usr/bin/google-chrome
 python3 tests/browser/terrain_check.py
 ```
 
-The browser checks replace three.js with a stand-in, so they catch JavaScript errors but not rendering problems.
-To see real rendering, the machine needs network access to `3d.geo.admin.ch`, `vectortiles.geo.admin.ch`,
-`cdnjs.cloudflare.com` and `cdn.jsdelivr.net`.
+`real_check.js` is the one that matters: it loads each spot from swisstopo in headless Chrome, drives, and fails when
+a spot does not load or falls back. Look at its screenshots after any rendering change. `GMA.dev()` in the page
+returns scene, camera, car and world for placing the camera in a test. It needs network access to
+`3d.geo.admin.ch`, `vectortiles.geo.admin.ch`, `cdnjs.cloudflare.com` and `cdn.jsdelivr.net`.
+The two Python checks replace three.js with a stand-in, so they catch JavaScript errors but not rendering problems.

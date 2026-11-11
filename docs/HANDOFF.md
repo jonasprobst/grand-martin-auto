@@ -27,22 +27,21 @@ mesh. Collision is 2D against the footprints; a car on a road never collides.
 - Street map from OpenFreeMap (before the switch to swisstopo tiles).
 - swisstopo terrain in Bern: hills, draped roads, car following the ground. Owner: "It's looking good."
 
-## Not verified (written without network access to the data servers)
+## Verified with real data in headless Chrome (11 November 2026)
 
-All of the following were tested only against synthetic data or mocks. Treat them as likely to need fixes.
+The workspace now reaches the data servers. `node tests/browser/real_check.js` loads every spot with real data.
 
-- **Bridge fix.** The owner reported that roads dipped into the valley on two bridges, one slightly and one badly.
-  A fix was pushed (join bridge pieces across map-tile overlap, land bridges on higher ground, treat short road pieces
-  between bridge pieces as bridge). The owner has not yet confirmed it.
-- **Road levelling** (`burnRoads`). Pushed after the owner said sloped roads were bumpy and tilted. Not confirmed.
-- **swisstopo street tiles.** Assumes zoom 14 tiles with OpenMapTiles layers `transportation`, `transportation_name`,
-  `building`, `water`, `waterway`, `landcover`, `landuse`. Not seen with real data. Unknown: whether footprints are
-  present at zoom 14, and how pedestrian streets are classed.
-- **Building models.** The riskiest part. Unknowns: size and structure of `tileset.json` (explicit tree assumed;
-  external tilesets and ADD or REPLACE refinement are handled), bounding-volume type, whether tiles carry
-  `RTC_CENTER`, glTF up axis (chosen from the data), whether `_BATCHID` survives Draco decoding in GLTFLoader r128
-  (needed to seat houses one by one), roof and wall split by mesh (guessed from face directions), load time and
-  memory on a phone. There is a 75 second limit, after which block houses are used.
+- swisstopo street tiles: zoom 14, roads, footprints, parks and water all present. No fallback needed.
+- Terrain at zoom 15, road levelling and bridges: look right in screenshots. Bridge decks span the Aare.
+- Building models: `tileset.json` is a tree of external tilesets with ADD refinement, about 120 `.b3dm` tiles and
+  4 million points per spot, two meshes per tile (roofs, walls), y up, `_BATCHID` survives as a float attribute.
+  Loading takes 12 to 30 seconds. House ids are not always whole, positive numbers; that crashed every city once.
+
+## Still not verified
+
+- Speed and memory on the owner's phone with the building models (about 1 million triangles in view in the old town).
+  Headless Chrome renders in software at a few frames per second, so it says nothing about a real device.
+- The owner has not yet confirmed the bridge fix and road levelling on the phone.
 
 ## How to debug with the owner
 
