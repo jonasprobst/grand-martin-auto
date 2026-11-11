@@ -58,7 +58,7 @@
         if (t.area === 'yes') continue;
         if (t.tunnel && t.tunnel !== 'building_passage' && t.tunnel !== 'no') continue;
         const r = ROAD[t.highway];
-        w.roads.push({ pts: pts, w: r[0], kind: r[1], name: t.name || '' });
+        w.roads.push({ pts: pts, w: r[0], kind: r[1], name: t.name || '', bridge: !!t.bridge && t.bridge !== 'no' });
       } else if (t.building && closed) {
         const poly = pts.slice(0, -1);
         const ar = Math.abs(polyArea(poly));
@@ -188,7 +188,7 @@
       each('transportation', (type, p, pts) => {
         if (type !== 2 || pts.length < 2 || p.brunnel === 'tunnel') return;
         const r = TROAD[p.class] || (p.class === 'path' && p.subclass === 'pedestrian' ? [5, 3] : null);
-        if (r) w.roads.push({ pts: pts, w: r[0], kind: r[1], name: '' });
+        if (r) w.roads.push({ pts: pts, w: r[0], kind: r[1], name: '', bridge: p.brunnel === 'bridge' });
       });
       each('transportation_name', (type, p, pts) => {
         const name = p['name:latin'] || p.name;
@@ -337,23 +337,38 @@
 
   const COL = {
     green: rgb('#8fdc6c'), wood: rgb('#62c15a'), water: rgb('#4dbdff'), land: rgb('#e9dfc8'),
-    pave: rgb('#d3cbbb'), road: rgb('#4a4d66'), service: rgb('#6c7088'), ped: rgb('#ecdfc4'), line: rgb('#ffe9a0')
+    pave: rgb('#d3cbbb'), wall: rgb('#b9b3a6'), under: rgb('#3a3d52'), road: rgb('#4a4d66'), service: rgb('#6c7088'), ped: rgb('#ecdfc4'), line: rgb('#ffe9a0')
   };
 
-  function ribbon(pts, width, y, c, pos, col) {
-    const n = pts.length;
-    if (n < 2) return;
-    const L = [], R = [], hw = width / 2;
+  function edges(pts, width) {
+    const n = pts.length, L = [], R = [], hw = width / 2;
     for (let i = 0; i < n; i++) {
       const a = pts[Math.max(0, i - 1)], b = pts[Math.min(n - 1, i + 1)];
-      let dx = b[0] - a[0], dz = b[1] - a[1];
-      const len = Math.hypot(dx, dz) || 1;
+      const dx = b[0] - a[0], dz = b[1] - a[1], len = Math.hypot(dx, dz) || 1;
       const nx = -dz / len * hw, nz = dx / len * hw;
       L.push([pts[i][0] + nx, pts[i][1] + nz]); R.push([pts[i][0] - nx, pts[i][1] - nz]);
     }
+    return [L, R];
+  }
+  // ys (optional): absolute height per vertex, used for bridge decks
+  function ribbon(pts, width, y, c, pos, col, ys) {
+    const n = pts.length;
+    if (n < 2) return;
+    const e = edges(pts, width), L = e[0], R = e[1];
     for (let i = 0; i < n - 1; i++) {
-      pos.push(L[i][0], y, L[i][1], R[i][0], y, R[i][1], L[i + 1][0], y, L[i + 1][1],
-        R[i][0], y, R[i][1], R[i + 1][0], y, R[i + 1][1], L[i + 1][0], y, L[i + 1][1]);
+      const ya = ys ? ys[i] + y : y, yb = ys ? ys[i + 1] + y : y;
+      pos.push(L[i][0], ya, L[i][1], R[i][0], ya, R[i][1], L[i + 1][0], yb, L[i + 1][1],
+        R[i][0], ya, R[i][1], R[i + 1][0], yb, R[i + 1][1], L[i + 1][0], yb, L[i + 1][1]);
+      for (let k = 0; k < 6; k++) col.push(c[0], c[1], c[2]);
+    }
+  }
+  // bridge: underside slab and a low wall along both sides
+  function deckSides(r, pos, col) {
+    const e = edges(r.pts, r.w + 3.2), ys = r.ys, c = COL.wall, u = COL.under;
+    ribbon(r.pts, r.w + 3.2, -1.0, u, pos, col, ys);
+    for (const S of e) for (let i = 0; i < S.length - 1; i++) {
+      const a = S[i], b = S[i + 1], a0 = ys[i] - 1, a1 = ys[i] + 0.8, b0 = ys[i + 1] - 1, b1 = ys[i + 1] + 0.8;
+      pos.push(a[0], a0, a[1], b[0], b0, b[1], b[0], b1, b[1], a[0], a0, a[1], b[0], b1, b[1], a[0], a1, a[1]);
       for (let k = 0; k < 6; k++) col.push(c[0], c[1], c[2]);
     }
   }
@@ -367,24 +382,237 @@
     }
   }
 
-  // Everything that lies flat on the ground, as one coloured triangle list.
+  // Everything that lies on the ground, as one coloured triangle list (y = small layer offset).
+  // Bridge decks come back separately in dpos/dcol with real heights.
   function buildFlat(w) {
-    const pos = [], col = [];
+    const pos = [], col = [], dpos = [], dcol = [];
     for (const a of w.areas) {
       const p = thin(a.pts, 300), tri = triangulate(p), c = COL[a.type];
       const y = a.type === 'water' ? 0.02 : a.type === 'land' ? 0.035 : 0.05;
       for (let i = 0; i < tri.length; i++) { const q = p[tri[i]]; pos.push(q[0], y, q[1]); col.push(c[0], c[1], c[2]); }
     }
     for (const r of w.rivers) ribbon(r.pts, r.w, 0.06, COL.water, pos, col);
-    for (const r of w.roads) if (r.kind !== 3) ribbon(r.pts, r.w + 3.2, 0.09, COL.pave, pos, col);
+    for (const r of w.roads) if (r.kind !== 3) {
+      if (r.ys) { ribbon(r.pts, r.w + 3.2, 0.02, COL.pave, dpos, dcol, r.ys); deckSides(r, dpos, dcol); }
+      else ribbon(r.pts, r.w + 3.2, 0.09, COL.pave, pos, col);
+    }
     for (const r of w.roads) {
       const c = r.kind === 1 ? COL.road : r.kind === 2 ? COL.service : COL.ped;
+      if (r.ys) { ribbon(r.pts, r.w, 0.06, c, dpos, dcol, r.ys); continue; }
       ribbon(r.pts, r.w, 0.13, c, pos, col);
       const a = r.pts[0], b = r.pts[r.pts.length - 1];
       disc(a[0], a[1], r.w / 2, 0.13, c, pos, col); disc(b[0], b[1], r.w / 2, 0.13, c, pos, col);
     }
-    for (const r of w.roads) if (r.kind === 1 && r.w >= 7) ribbon(r.pts, 0.3, 0.17, COL.line, pos, col);
-    return { pos: pos, col: col };
+    for (const r of w.roads) if (r.kind === 1 && r.w >= 7) {
+      if (r.ys) ribbon(r.pts, 0.3, 0.1, COL.line, dpos, dcol, r.ys); else ribbon(r.pts, 0.3, 0.17, COL.line, pos, col);
+    }
+    return { pos: pos, col: col, dpos: dpos, dcol: dcol };
+  }
+
+  // ---------- terrain ----------
+  // Height grid: n x n nodes, G metres apart, covering -R..R. Each cell is two flat triangles split
+  // along the diagonal from (x1, z0) to (x0, z1); heightAt uses the same split, so it matches the drawn mesh exactly.
+  function makeTerrain(h, n, R, G) {
+    const t = { h: h, n: n, R: R, G: G };
+    t.heightAt = function (x, z) {
+      let u = (x + R) / G, v = (z + R) / G;
+      u = u < 0 ? 0 : u > n - 1.0001 ? n - 1.0001 : u; v = v < 0 ? 0 : v > n - 1.0001 ? n - 1.0001 : v;
+      const i = Math.floor(u), j = Math.floor(v), fu = u - i, fv = v - j, k = j * n + i;
+      const h00 = h[k], h10 = h[k + 1], h01 = h[k + n], h11 = h[k + n + 1];
+      return fu + fv <= 1 ? h00 + (h10 - h00) * fu + (h01 - h00) * fv : h11 + (h01 - h11) * (1 - fu) + (h10 - h11) * (1 - fv);
+    };
+    return t;
+  }
+
+  // tris: flat list of x, z, height for each corner (9 numbers per triangle)
+  function rasterTIN(tris, R, G) {
+    const n = Math.floor(2 * R / G) + 1, h = new Float32Array(n * n).fill(NaN);
+    for (let t = 0; t < tris.length; t += 9) {
+      const ax = (tris[t] + R) / G, az = (tris[t + 1] + R) / G, ah = tris[t + 2];
+      const bx = (tris[t + 3] + R) / G, bz = (tris[t + 4] + R) / G, bh = tris[t + 5];
+      const cx = (tris[t + 6] + R) / G, cz = (tris[t + 7] + R) / G, ch = tris[t + 8];
+      const den = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz);
+      if (Math.abs(den) < 1e-12) continue;
+      const i0 = Math.max(0, Math.ceil(Math.min(ax, bx, cx) - 1e-6)), i1 = Math.min(n - 1, Math.floor(Math.max(ax, bx, cx) + 1e-6));
+      const j0 = Math.max(0, Math.ceil(Math.min(az, bz, cz) - 1e-6)), j1 = Math.min(n - 1, Math.floor(Math.max(az, bz, cz) + 1e-6));
+      for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+        const wa = ((bz - cz) * (i - cx) + (cx - bx) * (j - cz)) / den, wb = ((cz - az) * (i - cx) + (ax - cx) * (j - cz)) / den, wc = 1 - wa - wb;
+        if (wa < -1e-4 || wb < -1e-4 || wc < -1e-4) continue;
+        h[j * n + i] = wa * ah + wb * bh + wc * ch;
+      }
+    }
+    return { h: h, n: n };
+  }
+
+  // Fills gaps, smooths a little, and shifts heights so the lowest point is 0.
+  function finishTerrain(h, n, R, G, blur) {
+    let missing = 0;
+    for (let i = 0; i < h.length; i++) if (!(h[i] === h[i])) missing++;
+    if (missing > h.length * 0.4) throw new Error('terrain covers only ' + Math.round(100 - missing / h.length * 100) + '% of the area');
+    for (let pass = 0; missing && pass < 400; pass++) {
+      const src = h.slice();
+      missing = 0;
+      for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+        const k = j * n + i;
+        if (src[k] === src[k]) continue;
+        let sum = 0, c = 0;
+        if (i > 0 && src[k - 1] === src[k - 1]) { sum += src[k - 1]; c++; }
+        if (i < n - 1 && src[k + 1] === src[k + 1]) { sum += src[k + 1]; c++; }
+        if (j > 0 && src[k - n] === src[k - n]) { sum += src[k - n]; c++; }
+        if (j < n - 1 && src[k + n] === src[k + n]) { sum += src[k + n]; c++; }
+        if (c) h[k] = sum / c; else missing++;
+      }
+    }
+    for (let b = 0; b < (blur || 0); b++) {
+      const src = h.slice();
+      for (let j = 1; j < n - 1; j++) for (let i = 1; i < n - 1; i++) {
+        const k = j * n + i;
+        h[k] = (src[k] * 4 + src[k - 1] + src[k + 1] + src[k - n] + src[k + n]) / 8;
+      }
+    }
+    let min = Infinity, max = -Infinity;
+    for (let i = 0; i < h.length; i++) { if (h[i] < min) min = h[i]; if (h[i] > max) max = h[i]; }
+    for (let i = 0; i < h.length; i++) h[i] -= min;
+    const t = makeTerrain(h, n, R, G);
+    t.base = min; t.relief = max - min;
+    return t;
+  }
+
+  // Cesium quantized-mesh tile -> { u, v (0..1 across the tile), h (metres), idx }
+  function decodeQM(buf) {
+    const dv = new DataView(buf);
+    if (dv.byteLength < 96) throw new Error('terrain tile too short');
+    const minH = dv.getFloat32(24, true), maxH = dv.getFloat32(28, true), n = dv.getUint32(88, true);
+    let o = 92;
+    if (!n || o + 6 * n + 4 > dv.byteLength) throw new Error('terrain tile has a bad vertex count');
+    const u = new Float64Array(n), v = new Float64Array(n), h = new Float64Array(n);
+    let a = 0, b = 0, c = 0;
+    for (let i = 0; i < n; i++) {
+      const zu = dv.getUint16(o + 2 * i, true), zv = dv.getUint16(o + 2 * n + 2 * i, true), zh = dv.getUint16(o + 4 * n + 2 * i, true);
+      a += (zu >> 1) ^ -(zu & 1); b += (zv >> 1) ^ -(zv & 1); c += (zh >> 1) ^ -(zh & 1);
+      u[i] = a / 32767; v[i] = b / 32767; h[i] = minH + c / 32767 * (maxH - minH);
+    }
+    o += 6 * n;
+    const big = n > 65536;
+    if (big && o % 4) o += 4 - o % 4;
+    const tc = dv.getUint32(o, true); o += 4;
+    if (o + tc * 3 * (big ? 4 : 2) > dv.byteLength) throw new Error('terrain tile has a bad triangle count');
+    const idx = new Uint32Array(tc * 3);
+    let hi = 0;
+    for (let i = 0; i < tc * 3; i++) {
+      const code = big ? dv.getUint32(o + 4 * i, true) : dv.getUint16(o + 2 * i, true);
+      idx[i] = hi - code; if (code === 0) hi++;
+    }
+    return { u: u, v: v, h: h, idx: idx };
+  }
+
+  // Tiles of the global-geodetic TMS scheme (two tiles at zoom 0, y counted from the south).
+  function qmTileList(lat, lon, R, z) {
+    const size = 180 / Math.pow(2, z), dLat = R / 110540, dLon = R / (111320 * Math.cos(lat * Math.PI / 180)), out = [];
+    for (let x = Math.floor((lon - dLon + 180) / size); x <= Math.floor((lon + dLon + 180) / size); x++)
+      for (let y = Math.floor((lat - dLat + 90) / size); y <= Math.floor((lat + dLat + 90) / size); y++) out.push({ z: z, x: x, y: y });
+    return out;
+  }
+  function qmAddTriangles(tris, dec, t, lat0, lon0) {
+    const size = 180 / Math.pow(2, t.z), west = -180 + t.x * size, south = -90 + t.y * size;
+    const kx = 111320 * Math.cos(lat0 * Math.PI / 180), kz = 110540;
+    for (let i = 0; i < dec.idx.length; i++) {
+      const k = dec.idx[i];
+      tris.push((west + dec.u[k] * size - lon0) * kx, -(south + dec.v[k] * size - lat0) * kz, dec.h[k]);
+    }
+  }
+
+  function clipPoly(poly, f) { // keeps the part where f(p) <= 0
+    const out = [], n = poly.length;
+    for (let i = 0; i < n; i++) {
+      const p = poly[i], q = poly[(i + 1) % n], fp = f(p), fq = f(q);
+      if (fp <= 0) out.push(p);
+      if ((fp < 0 && fq > 0) || (fp > 0 && fq < 0)) { const t = fp / (fp - fq); out.push([p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]); }
+    }
+    return out;
+  }
+
+  // Cuts every flat triangle along the terrain's grid lines and diagonals, so each piece lies exactly on one terrain facet.
+  function drapeFlat(pos, col, t) {
+    const op = [], oc = [], R = t.R, G = t.G, n = t.n, H = t.heightAt;
+    for (let k = 0; k < pos.length; k += 9) {
+      const tri = [[pos[k], pos[k + 2]], [pos[k + 3], pos[k + 5]], [pos[k + 6], pos[k + 8]]];
+      const off = pos[k + 1], r = col[k], g = col[k + 1], b = col[k + 2];
+      const i0 = Math.max(0, Math.floor((Math.min(tri[0][0], tri[1][0], tri[2][0]) + R) / G));
+      const i1 = Math.min(n - 2, Math.floor((Math.max(tri[0][0], tri[1][0], tri[2][0]) + R) / G));
+      for (let i = i0; i <= i1; i++) {
+        const xa = -R + i * G, xb = xa + G;
+        const strip = clipPoly(clipPoly(tri, p => xa - p[0]), p => p[0] - xb);
+        if (strip.length < 3) continue;
+        let zmin = Infinity, zmax = -Infinity;
+        for (const p of strip) { if (p[1] < zmin) zmin = p[1]; if (p[1] > zmax) zmax = p[1]; }
+        const j0 = Math.max(0, Math.floor((zmin + R) / G)), j1 = Math.min(n - 2, Math.floor((zmax + R) / G));
+        for (let j = j0; j <= j1; j++) {
+          const za = -R + j * G, zb = za + G;
+          const cell = clipPoly(clipPoly(strip, p => za - p[1]), p => p[1] - zb);
+          if (cell.length < 3) continue;
+          const halves = [clipPoly(cell, p => (p[0] - xa) + (p[1] - za) - G), clipPoly(cell, p => G - (p[0] - xa) - (p[1] - za))];
+          for (const piece of halves) {
+            for (let m = 1; m < piece.length - 1; m++) {
+              for (const q of [piece[0], piece[m], piece[m + 1]]) { op.push(q[0], H(q[0], q[1]) + off, q[1]); oc.push(r, g, b); }
+            }
+          }
+        }
+      }
+    }
+    return { pos: op, col: oc };
+  }
+
+  // Puts the world on the terrain: stores the height lookup and gives bridges a deck that spans between their two ends.
+  function applyTerrain(w, t) {
+    w.terrain = t; w.heightAt = t.heightAt;
+    const H = t.heightAt, br = w.roads.filter(r => r.bridge && r.pts.length > 1);
+    if (!br.length) return w;
+    for (const r of br) { // short steps, so the deck can follow the ground where it touches it
+      const o = [r.pts[0]];
+      for (let i = 1; i < r.pts.length; i++) {
+        const a = r.pts[i - 1], b = r.pts[i], steps = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / 8));
+        for (let k = 1; k <= steps; k++) o.push([a[0] + (b[0] - a[0]) * k / steps, a[1] + (b[1] - a[1]) * k / steps]);
+      }
+      r.pts = o;
+    }
+    const nodes = new Map();
+    const node = p => {
+      const key = Math.round(p[0]) + ',' + Math.round(p[1]);
+      let nd = nodes.get(key);
+      if (!nd) { nd = { p: p, nb: [], h: H(p[0], p[1]), fixed: false, ends: 0 }; nodes.set(key, nd); }
+      return nd;
+    };
+    const link = (a, b, len) => { if (a === b) return; len = Math.max(0.1, len); a.nb.push([b, 1 / len]); b.nb.push([a, 1 / len]); };
+    for (const r of br) {
+      r.nodes = r.pts.map(node);
+      for (let i = 1; i < r.pts.length; i++) link(r.nodes[i - 1], r.nodes[i], Math.hypot(r.pts[i][0] - r.pts[i - 1][0], r.pts[i][1] - r.pts[i - 1][1]));
+    }
+    // a loose end that lies on another bridge piece (map tiles overlap a little) is joined to it instead of touching down
+    for (const r of br) for (const end of [r.nodes[0], r.nodes[r.nodes.length - 1]]) {
+      if (end.nb.length !== 1) continue;
+      let best = null, bd = 3.5;
+      for (const o of br) {
+        if (o === r) continue;
+        for (const nd of o.nodes) { const d = Math.hypot(nd.p[0] - end.p[0], nd.p[1] - end.p[1]); if (d < bd && nd !== end) { bd = d; best = nd; } }
+      }
+      if (best) link(end, best, bd);
+    }
+    const all = Array.from(nodes.values());
+    for (const nd of all) nd.fixed = nd.nb.length === 1;
+    const iters = Math.min(40000, 200 + all.length * all.length * 2);
+    for (let it = 0; it < iters; it++) {
+      let move = 0;
+      for (const nd of all) {
+        if (nd.fixed || !nd.nb.length) continue;
+        let sum = 0, ws = 0;
+        for (const e of nd.nb) { sum += e[0].h * e[1]; ws += e[1]; }
+        const v = sum / ws; move = Math.max(move, Math.abs(v - nd.h)); nd.h = v;
+      }
+      if (move < 0.0001) break;
+    }
+    for (const r of br) { r.ys = r.nodes.map(nd => Math.max(nd.h, H(nd.p[0], nd.p[1]) + 0.1)); delete r.nodes; }
+    return w;
   }
 
   const PALETTE = ['#ffd6a5', '#fdffb6', '#caffbf', '#9bf6ff', '#a0c4ff', '#bdb2ff', '#ffc6ff', '#fff1e6', '#ffadad', '#f1e3d3'].map(rgb);
@@ -395,14 +623,20 @@
       let p = thin(b.pts, 200);
       if (p.length < 3) continue;
       if (polyArea(p) > 0) p = p.slice().reverse(); // walk clockwise so wall normals point outward
-      const c = PALETTE[Math.abs(b.id) % PALETTE.length], h = b.h, n = p.length;
+      const c = PALETTE[Math.abs(b.id) % PALETTE.length], n = p.length;
+      let y0 = 0, h = b.h;
+      if (w.heightAt) { // stand on the slope: walls reach down to the lowest corner
+        let mn = Infinity, sum = 0;
+        for (const q of p) { const g = w.heightAt(q[0], q[1]); if (g < mn) mn = g; sum += g; }
+        y0 = mn - 0.4; h = sum / n + b.h;
+      }
       let u = 0;
       for (let i = 0; i < n; i++) {
         const A = p[i], B = p[(i + 1) % n];
         const dx = B[0] - A[0], dz = B[1] - A[1], len = Math.hypot(dx, dz);
         if (len < 0.01) continue;
-        const nx = -dz / len, nz = dx / len, u1 = u + len / 4, v1 = h / 3.5;
-        pos.push(A[0], 0, A[1], B[0], 0, B[1], B[0], h, B[1], A[0], 0, A[1], B[0], h, B[1], A[0], h, A[1]);
+        const nx = -dz / len, nz = dx / len, u1 = u + len / 4, v1 = (h - y0) / 3.5;
+        pos.push(A[0], y0, A[1], B[0], y0, B[1], B[0], h, B[1], A[0], y0, A[1], B[0], h, B[1], A[0], h, A[1]);
         uv.push(u, 0, u1, 0, u1, v1, u, 0, u1, v1, u, v1);
         for (let k = 0; k < 6; k++) { nor.push(nx, 0, nz); col.push(c[0], c[1], c[2]); }
         u = u1;
@@ -466,6 +700,26 @@
       }
       return { d: bd, r: best.r };
     };
+    if (!w.heightAt) w.heightAt = function () { return 0; };
+    // Height the car stands on. On or under a bridge there are two answers; take the one nearest to where the car already is.
+    w.groundAt = function (x, z, prev) {
+      const g = w.heightAt(x, z);
+      if (prev === undefined) return g;
+      const l = rg.get(key(Math.floor(x / RC), Math.floor(z / RC)));
+      if (!l) return g;
+      let best = g, bd = Math.abs(g - prev);
+      for (const s of l) {
+        const ys = s.r.ys;
+        if (!ys) continue;
+        const a = s.r.pts[s.i], b = s.r.pts[s.i + 1], dx = b[0] - a[0], dz = b[1] - a[1], L = dx * dx + dz * dz;
+        let t = L ? ((x - a[0]) * dx + (z - a[1]) * dz) / L : 0;
+        t = t < 0 ? 0 : t > 1 ? 1 : t;
+        if (Math.hypot(x - a[0] - dx * t, z - a[1] - dz * t) > s.r.w / 2 + 1.6) continue;
+        const y = ys[s.i] + (ys[s.i + 1] - ys[s.i]) * t + 0.06, d = Math.abs(y - prev);
+        if (d < bd) { bd = d; best = y; }
+      }
+      return best;
+    };
     w.hitBuilding = function (x, z) {
       const l = bg.get(key(Math.floor(x / BC), Math.floor(z / BC)));
       if (!l) return false;
@@ -483,7 +737,7 @@
     let best = null, bd = Infinity;
     for (const pass of [1, 0]) {
       for (const r of w.roads) {
-        if (pass && r.kind !== 1) continue;
+        if ((pass && r.kind !== 1) || r.bridge) continue;
         for (let i = 0; i < r.pts.length - 1; i++) {
           const a = r.pts[i], b = r.pts[i + 1];
           const mx = (a[0] + b[0]) / 2, mz = (a[1] + b[1]) / 2, d = Math.hypot(mx, mz);
@@ -497,7 +751,7 @@
 
   function placeStars(w, n, cx, cz, rnd, existing) {
     const lim = w.half - 40, out = [], all = (existing || []).slice();
-    let roads = w.roads.filter(r => r.kind === 1);
+    let roads = w.roads.filter(r => r.kind === 1 && !r.bridge);
     if (roads.length < 3) roads = w.roads;
     if (!roads.length) return out;
     for (let tries = 0; out.length < n && tries < 4000; tries++) {
@@ -575,7 +829,8 @@
     mulberry32: mulberry32, overpassQuery: overpassQuery, parseOSM: parseOSM, practiceTown: practiceTown,
     triangulate: triangulate, polyArea: polyArea, buildFlat: buildFlat, buildBuildings: buildBuildings,
     indexWorld: indexWorld, pickSpawn: pickSpawn, placeStars: placeStars, placeTrees: placeTrees,
-    stepCar: stepCar, MAXV: MAXV, decodeMVT: decodeMVT, tileList: tileList, worldFromTiles: worldFromTiles
+    stepCar: stepCar, MAXV: MAXV, decodeMVT: decodeMVT, decodeQM: decodeQM, qmTileList: qmTileList, qmAddTriangles: qmAddTriangles, rasterTIN: rasterTIN,
+    finishTerrain: finishTerrain, makeTerrain: makeTerrain, drapeFlat: drapeFlat, applyTerrain: applyTerrain, tileList: tileList, worldFromTiles: worldFromTiles
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.GMA = api;
 })(this);

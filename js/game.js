@@ -28,6 +28,7 @@
   ];
   const TILEJSON = 'https://tiles.openfreemap.org/planet';
   const TILE_FALLBACK = 'https://tiles.openfreemap.org/planet/20251217_001001_pt/{z}/{x}/{y}.pbf';
+  const SWISS_TERRAIN = 'https://3d.geo.admin.ch/ch.swisstopo.terrain.3d/v1/';
   const CHEERS = ['NICE!', 'ZOOM!', 'GOT IT!', 'YES!', 'WOW!', 'SUPER!'];
 
   const store = {
@@ -36,7 +37,7 @@
   };
 
   // ---------- state ----------
-  let renderer, scene, camera, worldGroup = null, car = null, wheels = [], frontPivots = [];
+  let renderer, scene, camera, ground = null, worldGroup = null, car = null, wheels = [], frontPivots = [];
   let world = null, s = null, stars = [], running = false, paused = false, last = 0, clock = 0;
   let level = 1, need = 5, got = 0, score = 0, best = +store.get('gma-best', 0) || 0;
   let carColor = store.get('gma-car', 'red'), soundOn = store.get('gma-sound', '1') === '1';
@@ -145,15 +146,67 @@
     let reached = false;
     try {
       const w = await fetchTiles(lat, lon);
-      if (w.roads.length >= 4) return w;
+      if (w.roads.length >= 4) { w.src = 'OpenFreeMap'; return w; }
       reached = true;
     } catch (e) { console.warn('tiles failed', e); }
     try {
       const w = C.parseOSM(await fetchOSM(lat, lon), lat, lon, HALF);
-      if (w.roads.length >= 4) return w;
+      if (w.roads.length >= 4) { w.src = 'Overpass'; return w; }
       reached = true;
     } catch (e) { console.warn('overpass failed', e); }
     throw new Error(reached ? 'nostreets' : 'net');
+  }
+
+  // ---------- terrain (swisstopo, Switzerland only for now) ----------
+  function inSwitzerland(lat, lon) { return lat > 45.8 && lat < 47.85 && lon > 5.9 && lon < 10.55; }
+  async function gunzipIfNeeded(buf) {
+    const b = new Uint8Array(buf);
+    if (b[0] === 0x1f && b[1] === 0x8b && window.DecompressionStream)
+      return new Response(new Blob([buf]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
+    return buf;
+  }
+  async function swissTerrain(lat, lon) {
+    const R = HALF + 310, G = 10;
+    let base = SWISS_TERRAIN, tpl = '{z}/{x}/{y}.terrain';
+    try {
+      const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 8000);
+      try {
+        const r = await fetch(SWISS_TERRAIN + 'layer.json', { signal: ctl.signal });
+        const lj = await r.json();
+        if (lj && lj.tiles && lj.tiles[0]) { tpl = String(lj.tiles[0]).replace('{version}', lj.version || ''); base = new URL('.', r.url).href; }
+      } finally { clearTimeout(timer); }
+    } catch (e) { /* use the documented tile address */ }
+    let lastErr = null;
+    for (const z of [15, 14]) {
+      try {
+        const tris = [], list = C.qmTileList(lat, lon, R, z);
+        await Promise.all(list.map(async t => {
+          const url = new URL(tpl.replace('{z}', t.z).replace('{x}', t.x).replace('{y}', t.y), base).href;
+          const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 20000);
+          try {
+            const r = await fetch(url, { signal: ctl.signal, headers: { Accept: 'application/vnd.quantized-mesh,application/octet-stream;q=0.9,*/*;q=0.01' } });
+            if (!r.ok) throw new Error('terrain tile ' + t.z + '/' + t.x + '/' + t.y + ' answered ' + r.status);
+            C.qmAddTriangles(tris, C.decodeQM(await gunzipIfNeeded(await r.arrayBuffer())), t, lat, lon);
+          } finally { clearTimeout(timer); }
+        }));
+        const ras = C.rasterTIN(tris, R, G), ter = C.finishTerrain(ras.h, ras.n, R, G, 1);
+        ter.info = 'swisstopo, zoom ' + z + ', ' + list.length + ' tiles, ' + Math.round(ter.relief) + ' m of height difference';
+        return ter;
+      } catch (e) { lastErr = e; }
+    }
+    throw lastErr || new Error('no terrain');
+  }
+  // Never fails: without terrain the city is simply flat. The reason is kept for the pause screen.
+  async function loadTerrain(w, lat, lon) {
+    if (!inSwitzerland(lat, lon)) { w.terrainInfo = 'flat (terrain is only loaded in Switzerland)'; return; }
+    try {
+      const ter = await swissTerrain(lat, lon);
+      C.applyTerrain(w, ter);
+      w.terrainInfo = ter.info;
+    } catch (e) {
+      console.warn('terrain failed', e);
+      w.terrainInfo = 'flat, swisstopo terrain failed: ' + String((e && e.message) || e).slice(0, 120);
+    }
   }
 
   function showLoading(title, text) {
@@ -181,6 +234,7 @@
       if (place.practice) {
         showLoading('Practice Town', 'Building a town to practise in');
         w = C.practiceTown();
+        if (location.hash === '#terrain-test') await loadTerrain(w, 46.9480, 7.4474); // practice streets on Bern's real hills
       } else {
         if (place.query) {
           showLoading('Searching', 'Looking for ' + place.query);
@@ -188,6 +242,8 @@
         }
         showLoading(place.name, 'Fetching the real streets and buildings');
         w = await loadWorld(place.lat, place.lon);
+        $('#load-text').textContent = 'Fetching the hills';
+        await loadTerrain(w, place.lat, place.lon);
         $('#load-text').textContent = 'Building the city';
         await new Promise(r => setTimeout(r, 30));
         w.name = place.name;
@@ -220,7 +276,7 @@
     const sun = new THREE.DirectionalLight(0xfff0d0, 0.65);
     sun.position.set(0.5, 1, 0.35);
     scene.add(sun);
-    const ground = new THREE.Mesh(new THREE.PlaneGeometry(7000, 7000), new THREE.MeshBasicMaterial({ color: 0xe9dfc8 }));
+    ground = new THREE.Mesh(new THREE.PlaneGeometry(7000, 7000), new THREE.MeshBasicMaterial({ color: 0xe9dfc8 }));
     ground.rotation.x = -Math.PI / 2;
     scene.add(ground);
     // puffy clouds
@@ -277,12 +333,37 @@
   function buildWorld(w) {
     if (worldGroup) disposeGroup(worldGroup);
     worldGroup = new THREE.Group();
-    const f = C.buildFlat(w);
+    const ter = w.terrain || null;
+    ground.position.y = ter ? -0.6 : 0;
+    if (ter) { // the hills themselves
+      const n = ter.n, P = new Float32Array(n * n * 3), I = [];
+      for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+        const k = j * n + i;
+        P[k * 3] = -ter.R + i * ter.G; P[k * 3 + 1] = ter.h[k]; P[k * 3 + 2] = -ter.R + j * ter.G;
+      }
+      for (let j = 0; j < n - 1; j++) for (let i = 0; i < n - 1; i++) {
+        const a = j * n + i;
+        I.push(a, a + n, a + 1, a + 1, a + n, a + n + 1);
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(P, 3));
+      g.setIndex(I);
+      g.computeVertexNormals();
+      worldGroup.add(new THREE.Mesh(g, new THREE.MeshLambertMaterial({ color: 0xdcd2ba })));
+    }
+    const raw = C.buildFlat(w), f = ter ? C.drapeFlat(raw.pos, raw.col, ter) : raw;
+    const flatMat = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide });
     if (f.pos.length) {
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.Float32BufferAttribute(f.pos, 3));
       g.setAttribute('color', new THREE.Float32BufferAttribute(f.col, 3));
-      worldGroup.add(new THREE.Mesh(g, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide })));
+      worldGroup.add(new THREE.Mesh(g, flatMat));
+    }
+    if (raw.dpos.length) { // bridge decks
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(raw.dpos, 3));
+      g.setAttribute('color', new THREE.Float32BufferAttribute(raw.dcol, 3));
+      worldGroup.add(new THREE.Mesh(g, flatMat));
     }
     const b = C.buildBuildings(w);
     if (b.pos.length) {
@@ -300,8 +381,9 @@
       const m = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), sc = new THREE.Vector3();
       trees.forEach((t, i) => {
         sc.set(t[2], t[2], t[2]);
-        p.set(t[0], 5 * t[2], t[1]); m.compose(p, q, sc); top.setMatrixAt(i, m);
-        p.set(t[0], 1.2 * t[2], t[1]); m.compose(p, q, sc); trunk.setMatrixAt(i, m);
+        const gy = w.heightAt(t[0], t[1]);
+        p.set(t[0], gy + 5 * t[2], t[1]); m.compose(p, q, sc); top.setMatrixAt(i, m);
+        p.set(t[0], gy + 1.2 * t[2], t[1]); m.compose(p, q, sc); trunk.setMatrixAt(i, m);
       });
       top.instanceMatrix.needsUpdate = true; trunk.instanceMatrix.needsUpdate = true;
       top.frustumCulled = false; trunk.frustumCulled = false;
@@ -357,7 +439,7 @@
       const beam = new THREE.Mesh(new THREE.CylinderGeometry(1.3, 1.3, 90, 10, 1, true), beamMat);
       beam.position.y = 45;
       o.add(m, beam);
-      o.position.set(p.x, 0, p.z);
+      o.position.set(p.x, world.heightAt(p.x, p.z), p.z);
       scene.add(o);
       stars.push({ x: p.x, z: p.z, obj: o, mesh: m });
     });
@@ -368,15 +450,17 @@
   function startGame(w) {
     world = w;
     const sp = C.pickSpawn(w);
-    s = { x: sp.x, z: sp.z, h: sp.h, v: 0, steer: 0, onRoad: true, street: '' };
+    s = { x: sp.x, z: sp.z, h: sp.h, v: 0, steer: 0, onRoad: true, street: '', y: w.groundAt(sp.x, sp.z), vy: 0, pitch: 0, roll: 0 };
     if (car) scene.remove(car);
     car = makeCar((CARS.find(o => o.id === carColor) || CARS[0]).c);
+    car.rotation.order = 'YXZ';
     scene.add(car);
     clearStars();
     level = 1; score = 0; lastStreet = null;
     startLevel();
-    camera.position.set(s.x - Math.sin(s.h) * 30, 22, s.z - Math.cos(s.h) * 30);
+    camera.position.set(s.x - Math.sin(s.h) * 30, s.y + 22, s.z - Math.cos(s.h) * 30);
     $('#sign-city').textContent = w.name;
+    $('#dbg').textContent = 'Map: ' + (w.src || 'built in') + '. Terrain: ' + (w.terrainInfo || 'flat') + '.';
     $('#menu').hidden = true; $('#hud').hidden = false; $('#pause').hidden = true; $('#win').hidden = true;
     paused = false; running = true; last = 0;
     toast('FIND THE STARS!');
@@ -499,20 +583,34 @@
     if (ev.bump > 2) { bump(Math.min(1, ev.bump / 15)); if (ev.bump > 6) toast('BONK!'); }
     if (ev.edge && clock - edgeToastAt > 3) { edgeToastAt = clock; toast('TURN AROUND!'); }
     const fx = Math.sin(s.h), fz = Math.cos(s.h);
-    car.position.set(s.x, 0, s.z);
-    car.rotation.set(0, s.h, 0);
-    car.rotateZ(s.steer * s.v * 0.004);
+    // height: follow the ground, or fall when the ground drops away (driving off a bridge)
+    const gy = world.groundAt(s.x, s.z, s.y);
+    if (s.y - gy > 0.45) {
+      s.vy -= 25 * dt; s.y += s.vy * dt;
+      if (s.y <= gy) { if (s.vy < -7) { bump(0.9); toast('BOING!'); } s.y = gy; s.vy = 0; }
+    } else {
+      s.y = gy; s.vy = 0;
+      const hf = world.groundAt(s.x + fx * 2, s.z + fz * 2, s.y), hb = world.groundAt(s.x - fx * 2, s.z - fz * 2, s.y);
+      const hl = world.groundAt(s.x + fz * 0.95, s.z - fx * 0.95, s.y), hr = world.groundAt(s.x - fz * 0.95, s.z + fx * 0.95, s.y);
+      const kk = Math.min(1, dt * 10);
+      if (Math.abs(hf - hb) < 3) s.pitch += (Math.atan2(hf - hb, 4) - s.pitch) * kk;
+      if (Math.abs(hl - hr) < 1.5) s.roll += (Math.atan2(hl - hr, 1.9) - s.roll) * kk;
+    }
+    car.position.set(s.x, s.y, s.z);
+    car.rotation.set(-s.pitch, s.h, s.roll + s.steer * s.v * 0.004);
     const spin = s.v * dt / 0.42;
     wheels.forEach(w => { w.rotation.x += spin; });
     frontPivots.forEach(p => { p.rotation.y = -s.steer * 0.45; });
 
     const back = 9.5 + Math.abs(s.v) * 0.12;
-    camTarget.x = s.x - fx * back; camTarget.y = 4.6 + Math.abs(s.v) * 0.04; camTarget.z = s.z - fz * back;
+    camTarget.x = s.x - fx * back; camTarget.y = s.y + 4.6 + Math.abs(s.v) * 0.04; camTarget.z = s.z - fz * back;
     const k = 1 - Math.exp(-dt * 4.5);
     camera.position.x += (camTarget.x - camera.position.x) * k;
     camera.position.y += (camTarget.y - camera.position.y) * k;
     camera.position.z += (camTarget.z - camera.position.z) * k;
-    camera.lookAt(s.x + fx * 6, 1.4, s.z + fz * 6);
+    const floor = world.heightAt(camera.position.x, camera.position.z) + 1.5; // keep the camera out of the hillside
+    if (camera.position.y < floor) camera.position.y = floor;
+    camera.lookAt(s.x + fx * 6, s.y + 1.4, s.z + fz * 6);
 
     let near = null, nd = Infinity;
     for (let i = stars.length - 1; i >= 0; i--) {

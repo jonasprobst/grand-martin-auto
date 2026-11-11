@@ -1,6 +1,6 @@
 # Plan: swisstopo terrain and buildings for Bern
 
-Status: not started. Agreed order: terrain first, then building models. Bern (46.9480, 7.4474) is the test map.
+Status: step 1 (terrain) is written but was built without access to swisstopo's servers, so it is only tested against synthetic tiles. Step 2 (building models) not started. Agreed order: terrain first, then building models. Bern (46.9480, 7.4474) is the test map.
 
 ## Data sources (open, no key)
 
@@ -29,6 +29,9 @@ Status: not started. Agreed order: terrain first, then building models. Bern (46
 5. Collision keeps using footprints (from OpenFreeMap, or derived from the models).
 
 ## Testing
+
+Open the game with `#terrain-test` at the end of the address and pick Practice Town: this puts the practice streets on Bern's real terrain, which isolates terrain problems from map problems.
+
 
 The agent workspace needs network access to: `3d.geo.admin.ch`, `tiles.openfreemap.org`, `cdnjs.cloudflare.com`,
 `cdn.jsdelivr.net`. With those allowed, load the game in headless Chrome and check real screenshots of Bern.
