@@ -179,7 +179,7 @@
 
   // ---------- swisstopo building models (3D Tiles) ----------
   async function loadModels(w, lat, lon) {
-    const note = { tilesets: 0, tiles: 0, meshes: 0, verts: 0 };
+    const note = { tilesets: 0, tiles: 0, meshes: 0, verts: 0, all: 0 };
     w.models = null;
     let gaveUp = false;
     try {
@@ -251,7 +251,7 @@
 
       // glTF says y is up; check against the data, since a wrong guess would tip every house on its side
       const frame = C.localFrame(lat, lon), range = [0, 0];
-      for (const yUp of [1, 0]) for (const t of loaded) for (const p of t.prims) {
+      for (const yUp of [1, 0]) for (const t of loaded.slice(0, 6)) for (const p of t.prims) {
         const r = C.modelToLocal(Float64Array.from(p.raw), !!yUp, t.rtc, t.T, frame);
         range[yUp] = Math.max(range[yUp], r[1] - r[0]);
       }
@@ -260,19 +260,30 @@
 
       const ter = w.terrain, base = ter ? ter.base : 0, group = [], seats = [];
       let ids = 0, tileNo = 0;
+      const keep = HALF + 130; // houses further out are hidden by the fog anyway
       for (const t of loaded) {
         tileNo++;
-        for (const p of t.prims) { p.pos = p.raw; C.modelToLocal(p.pos, yUp, t.rtc, t.T, frame); if (p.batch) ids++; }
+        t.prims = t.prims.map(p => {
+          C.modelToLocal(p.raw, yUp, t.rtc, t.T, frame);
+          note.all += p.raw.length / 3;
+          const c = C.cropPrim({ pos: p.raw, batch: p.batch, index: p.index }, keep);
+          p.raw = null;
+          return c;
+        }).filter(p => p.index.length);
+        if (!t.prims.length) continue;
+        if (t.prims.every(p => p.batch)) ids++;
         const st = C.seatBuildings(t.prims, w.heightAt || (() => 0), base);
         seats.push(st.median);
         for (const p of t.prims) { group.push({ pos: new Float32Array(p.pos), batch: p.batch, index: p.index, tile: tileNo }); note.meshes++; note.verts += p.pos.length / 3; }
+        t.prims = null;
       }
+      if (!group.length) throw new Error('the building tiles held no houses for this area');
       seats.sort((a, b) => a - b);
       note.seat = (ids ? 'each house set on the ground' : 'no house ids, true heights used') + ', typical shift ' + Math.round(seats[seats.length >> 1] + base) + ' m';
       if (gaveUp) return;
       w.models = group;
       w.modelInfo = 'swisstopo 3D, ' + note.tiles + ' tiles (' + note.refine + ', first ' + note.first + '), ' + note.meshes + ' meshes, ' +
-        Math.round(note.verts / 1000) + 'k points, up axis ' + note.up + ', ' + note.seat + (note.failed ? ', ' + note.failed : '');
+        Math.round(note.verts / 1000) + 'k of ' + Math.round(note.all / 1000) + 'k points kept, up axis ' + note.up + ', ' + note.seat + (note.failed ? ', ' + note.failed : '');
       })();
       job.catch(() => {});
       await Promise.race([job, new Promise((res, rej) => setTimeout(() => rej(new Error('took longer than 75 seconds')), 75000))]);
@@ -423,7 +434,7 @@
       g.setAttribute('position', new THREE.BufferAttribute(P, 3));
       g.setIndex(I);
       g.computeVertexNormals();
-      worldGroup.add(new THREE.Mesh(g, new THREE.MeshLambertMaterial({ color: 0xdcd2ba })));
+      worldGroup.add(new THREE.Mesh(g, new THREE.MeshLambertMaterial({ color: 0xa9a28c })));
     }
     const raw = C.buildFlat(w), f = ter ? C.drapeFlat(raw.pos, raw.col, ter) : raw;
     const flatMat = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide });
@@ -439,35 +450,13 @@
       g.setAttribute('color', new THREE.Float32BufferAttribute(raw.dcol, 3));
       worldGroup.add(new THREE.Mesh(g, flatMat));
     }
+    let housesDrawn = false;
     if (w.models && w.models.length) {
-      // real building models: sandstone walls coloured per house, clay roofs
-      const WALLS = [[0.93, 0.88, 0.76], [0.87, 0.82, 0.70], [0.96, 0.92, 0.83], [0.82, 0.78, 0.68], [0.90, 0.84, 0.72], [0.85, 0.86, 0.80]];
-      const ROOF = [0.74, 0.40, 0.27];
-      const mat = new THREE.MeshPhongMaterial({ vertexColors: true, flatShading: true, shininess: 0, specular: 0x000000, side: THREE.DoubleSide });
-      for (const m of w.models) {
-        const pos = m.pos, n = pos.length / 3, col = new Float32Array(n * 3);
-        // a mesh whose faces mostly point up is a roof
-        let up = 0, all = 0;
-        const tri = m.index ? m.index.length / 3 : n / 3;
-        for (let t = 0; t < tri; t += 1 + Math.floor(tri / 3000)) {
-          const a = (m.index ? m.index[t * 3] : t * 3) * 3, b = (m.index ? m.index[t * 3 + 1] : t * 3 + 1) * 3, c = (m.index ? m.index[t * 3 + 2] : t * 3 + 2) * 3;
-          const ux = pos[b] - pos[a], uy = pos[b + 1] - pos[a + 1], uz = pos[b + 2] - pos[a + 2], vx = pos[c] - pos[a], vy = pos[c + 1] - pos[a + 1], vz = pos[c + 2] - pos[a + 2];
-          const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx, len = Math.hypot(nx, ny, nz);
-          all += len; if (len && Math.abs(ny) / len > 0.35) up += len;
-        }
-        const roof = all > 0 && up / all > 0.6;
-        for (let i = 0; i < n; i++) {
-          const c = roof ? ROOF : WALLS[((m.batch ? m.batch[i] : 0) * 7 + m.tile * 3) % WALLS.length];
-          col[i * 3] = c[0]; col[i * 3 + 1] = c[1]; col[i * 3 + 2] = c[2];
-        }
-        const g = new THREE.BufferGeometry();
-        g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-        g.setAttribute('color', new THREE.BufferAttribute(col, 3));
-        if (m.index) g.setIndex(new THREE.BufferAttribute(m.index, 1));
-        worldGroup.add(new THREE.Mesh(g, mat));
-      }
+      try { worldGroup.add(modelMeshes(w.models)); housesDrawn = true; }
+      catch (e) { console.warn('drawing the building models failed', e); w.modelInfo = 'simple blocks, drawing the swisstopo models failed: ' + String((e && e.message) || e).slice(0, 120); }
       w.models = null; // the meshes own the data now
-    } else {
+    }
+    if (!housesDrawn) {
       const b = C.buildBuildings(w);
       if (b.pos.length) {
         const g = new THREE.BufferGeometry();
@@ -495,6 +484,38 @@
     }
     scene.add(worldGroup);
     buildMini(w);
+  }
+
+  // Real building models: sandstone walls coloured per house, clay roofs.
+  function modelMeshes(models) {
+    const WALLS = [[237, 224, 194], [222, 209, 179], [245, 235, 212], [209, 199, 173], [230, 214, 184], [217, 219, 204]];
+    const ROOF = [189, 102, 69];
+    const mat = new THREE.MeshPhongMaterial({ vertexColors: true, flatShading: true, shininess: 0, specular: 0x000000, side: THREE.DoubleSide });
+    const group = new THREE.Group();
+    for (const m of models) {
+      const pos = m.pos, n = pos.length / 3, col = new Uint8Array(n * 3);
+      // a mesh whose faces mostly point up is a roof
+      let up = 0, all = 0;
+      const tri = m.index ? m.index.length / 3 : n / 3;
+      for (let t = 0; t < tri; t += 1 + Math.floor(tri / 3000)) {
+        const a = (m.index ? m.index[t * 3] : t * 3) * 3, b = (m.index ? m.index[t * 3 + 1] : t * 3 + 1) * 3, c = (m.index ? m.index[t * 3 + 2] : t * 3 + 2) * 3;
+        const ux = pos[b] - pos[a], uy = pos[b + 1] - pos[a + 1], uz = pos[b + 2] - pos[a + 2], vx = pos[c] - pos[a], vy = pos[c + 1] - pos[a + 1], vz = pos[c + 2] - pos[a + 2];
+        const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx, len = Math.hypot(nx, ny, nz);
+        all += len; if (len && Math.abs(ny) / len > 0.35) up += len;
+      }
+      const roof = all > 0 && up / all > 0.6;
+      for (let i = 0; i < n; i++) {
+        // ids arrive as floats and are not always whole or positive, so they are tidied before picking a colour
+        const c = roof ? ROOF : WALLS[Math.abs(((m.batch && Math.round(m.batch[i])) || 0) * 7 + m.tile * 3) % WALLS.length];
+        col[i * 3] = c[0]; col[i * 3 + 1] = c[1]; col[i * 3 + 2] = c[2];
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      g.setAttribute('color', new THREE.BufferAttribute(col, 3, true));
+      if (m.index) g.setIndex(new THREE.BufferAttribute(m.index, 1));
+      group.add(new THREE.Mesh(g, mat));
+    }
+    return group;
   }
 
   function makeCar(hex) {
@@ -822,6 +843,7 @@
     $('#btn-practice').addEventListener('click', () => { $('#loading').hidden = true; go({ practice: true, name: 'Practice Town' }); });
   }
 
+  C.dev = () => ({ scene: scene, camera: camera, renderer: renderer, car: s, world: world, stars: stars }); // for automated tests
   buildMenu();
   bindInput();
   setSound(soundOn);

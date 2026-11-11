@@ -1,6 +1,6 @@
 # Plan: swisstopo terrain and buildings for Bern
 
-Status: terrain is confirmed working in Bern. Streets from swisstopo vector tiles and the building models are written but were built without access to swisstopo's servers; they are tested only against synthetic data and mocks. The pause screen reports what loaded.
+Status (11 November 2026): everything in this plan is confirmed against swisstopo's real servers in headless Chrome. All five Bern spots load swisstopo streets, terrain and building models; `node test/browser.js` checks this. The pause screen reports what loaded.
 
 ## Data sources (open, no key)
 
@@ -32,12 +32,24 @@ Status: terrain is confirmed working in Bern. Streets from swisstopo vector tile
 
 ## Testing
 
-Open the game with `#terrain-test` at the end of the address and pick Practice Town: this puts the practice streets on Bern's real terrain, which isolates terrain problems from map problems.
+- `node test/core.test.js`: logic tests for `js/core.js`, no browser or network needed.
+- `node test/browser.js [spot ...] [--shots dir]`: opens the game in headless Chrome (Playwright), loads each spot with real data, drives, pauses and returns to the menu. It fails when a spot does not load, falls back to a simpler source, or the page throws. `--shots` saves a screenshot per spot; look at them after any change to rendering.
+- `GMA.dev()` in the browser console returns the scene, camera, car and world, for moving the camera in tests.
+- `#terrain-test` at the end of the address plus Practice Town puts the practice streets on Bern's real terrain and houses.
 
+The agent workspace needs network access to `vectortiles.geo.admin.ch`, `3d.geo.admin.ch`, `tiles.openfreemap.org`, `cdnjs.cloudflare.com` and `cdn.jsdelivr.net`. Headless Chrome renders in software at a few frames per second with a full city, so judge speed on a real device.
 
-The agent workspace needs network access to: `3d.geo.admin.ch`, `tiles.openfreemap.org`, `cdnjs.cloudflare.com`,
-`cdn.jsdelivr.net`. With those allowed, load the game in headless Chrome and check real screenshots of Bern.
-Logic tests for `js/core.js` run in Node without a browser.
+## Found by testing (fixed)
+
+- The building models carry house ids as floats that are not always whole, positive numbers. The wall colour lookup returned nothing for those and every city failed with "Something broke". Ids are now tidied, and if drawing the models fails the game falls back to simple blocks.
+- A spot holds about 4 million model points. Houses beyond the fog are now dropped (about 10 to 15 percent) and colours are stored as bytes.
+- The bare ground rendered almost white; it is now sand coloured.
+
+## Open
+
+- Speed on phones is untested: about 1 million triangles are in view in the old town. If it stutters, shorten the fog distance or thin the models.
+- Many streets show as "Street": check which name fields the swisstopo tiles carry.
+- Water shimmers when seen from high up (it lies very close to the terrain).
 
 ## Ideas for later
 
