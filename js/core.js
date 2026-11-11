@@ -349,6 +349,31 @@
     return [lo, hi];
   }
 
+  // Drops the houses of one model mesh that lie outside the square |x|, |z| <= lim, so a phone does not have to hold
+  // the whole tile. With batch ids a house is kept whole when any of its points is inside. Returns a compact indexed mesh.
+  function cropPrim(p, lim) {
+    const pos = p.pos, n = pos.length / 3, tri = p.index ? p.index.length / 3 : Math.floor(n / 3);
+    const inside = v => Math.abs(pos[v * 3]) <= lim && Math.abs(pos[v * 3 + 2]) <= lim;
+    let ids = null;
+    if (p.batch) { ids = new Set(); for (let v = 0; v < n; v++) if (inside(v)) ids.add(p.batch[v]); }
+    const map = new Int32Array(n).fill(-1), idx = new Uint32Array(tri * 3);
+    let m = 0, k = 0;
+    for (let t = 0; t < tri; t++) {
+      const a = p.index ? p.index[t * 3] : t * 3, b = p.index ? p.index[t * 3 + 1] : t * 3 + 1, c = p.index ? p.index[t * 3 + 2] : t * 3 + 2;
+      if (!(ids ? ids.has(p.batch[a]) : inside(a) || inside(b) || inside(c))) continue;
+      if (map[a] < 0) map[a] = m++; if (map[b] < 0) map[b] = m++; if (map[c] < 0) map[c] = m++;
+      idx[k++] = map[a]; idx[k++] = map[b]; idx[k++] = map[c];
+    }
+    const out = { pos: new Float64Array(m * 3), batch: p.batch ? new Float32Array(m) : null, index: idx.slice(0, k) };
+    for (let v = 0; v < n; v++) {
+      const d = map[v];
+      if (d < 0) continue;
+      out.pos[d * 3] = pos[v * 3]; out.pos[d * 3 + 1] = pos[v * 3 + 1]; out.pos[d * 3 + 2] = pos[v * 3 + 2];
+      if (out.batch) out.batch[d] = p.batch[v];
+    }
+    return out;
+  }
+
   // Sets every building on the game's ground. prims: [{ pos: local x y z list, batch: id per vertex or null }] of one tile.
   // With batch ids each building is moved on its own; without, the whole tile keeps its true height minus `base`.
   function seatBuildings(prims, heightAt, base) {
@@ -1022,7 +1047,7 @@
     indexWorld: indexWorld, pickSpawn: pickSpawn, placeStars: placeStars, placeTrees: placeTrees,
     stepCar: stepCar, MAXV: MAXV, decodeMVT: decodeMVT, decodeQM: decodeQM, qmTileList: qmTileList, qmAddTriangles: qmAddTriangles, rasterTIN: rasterTIN,
     finishTerrain: finishTerrain, burnRoads: burnRoads, scale: scale, ecef: ecef, geodetic: geodetic, localFrame: localFrame,
-    parseB3dm: parseB3dm, volumeNear: volumeNear, mul4: mul4, modelToLocal: modelToLocal, seatBuildings: seatBuildings, makeTerrain: makeTerrain, drapeFlat: drapeFlat, applyTerrain: applyTerrain, tileList: tileList, worldFromTiles: worldFromTiles
+    parseB3dm: parseB3dm, volumeNear: volumeNear, mul4: mul4, modelToLocal: modelToLocal, seatBuildings: seatBuildings, cropPrim: cropPrim, makeTerrain: makeTerrain, drapeFlat: drapeFlat, applyTerrain: applyTerrain, tileList: tileList, worldFromTiles: worldFromTiles
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.GMA = api;
 })(this);
