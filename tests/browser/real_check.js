@@ -41,6 +41,7 @@ const TYPES = { '.html': 'text/html', '.js': 'text/javascript' };
         if (!/^Map: swisstopo \(/.test(dbg)) fail(spot, 'streets did not come from swisstopo');
         if (!/Terrain: swisstopo/.test(dbg)) fail(spot, 'no terrain');
         if (!/Houses: swisstopo 3D/.test(dbg)) fail(spot, 'no building models');
+        if (!/Trees: swisstopo, .* [1-9]\d* of \d+ trees shown/.test(dbg)) fail(spot, 'no real trees');
       }
       // drive: hold the gas for a while and see that the car moved and the frame loop is alive
       const a = await page.evaluate(() => { const c = GMA.dev().car; return [c.x, c.z]; });
@@ -48,7 +49,7 @@ const TYPES = { '.html': 'text/html', '.js': 'text/javascript' };
       const b = await page.evaluate(() => { const d = GMA.dev(), c = d.car; return [c.x, c.z, c.v, d.stars.length, d.renderer.info.render.triangles]; });
       const moved = Math.hypot(b[0] - a[0], b[1] - a[1]);
       console.log('  drove ' + moved.toFixed(1) + ' m, speed ' + b[2].toFixed(1) + ' m/s, ' + b[3] + ' stars, ' + b[4] + ' triangles in view');
-      if (!(moved > 0.5)) fail(spot, 'the car did not move');
+      if (!(moved > 0.2 && Math.abs(b[2]) > 1)) fail(spot, 'the car did not move'); // software rendering is slow, so the distance is small
       if (!b[3]) fail(spot, 'no stars were placed');
       if (shots) await page.screenshot({ path: path.join(shots, spot.replace(/\W+/g, '-').toLowerCase() + '.png') });
       // pause screen and back to the menu

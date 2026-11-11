@@ -51,6 +51,18 @@ The agent workspace needs network access to `vectortiles.geo.admin.ch`, `3d.geo.
 - Many streets show as "Street": check which name fields the swisstopo tiles carry.
 - Water shimmers when seen from high up (it lies very close to the terrain).
 
+## Step 3: trees and bridges (done, 11 November 2026)
+
+- Trees: `ch.swisstopo.vegetation.3d` is 3D Tiles with `.i3dm` tiles inside `.cmpt` bundles. Each instance has an
+  Earth-centred position and a scale that is the tree height in metres; the tree model is one generic shape, so the
+  game reads only position and height (`C.parseTrees`, `C.realTrees`) and draws its own pointed and round trees.
+  About 4,500 trees per spot, 2,000 shown after dropping those outside the map, on roads or in houses.
+- Bridges: `ch.swisstopo.swisstlm3d.3d` was tried and dropped. It holds only thin flat ribbons along roads and
+  rails on structures, no piers or arches. The game instead builds piers and arched side walls under its own bridge
+  decks (`C.bridgeParts`).
+- Houses: swissBUILDINGS3D 3.0 is already the most detailed open model (roof shapes, dormers, towers, no textures).
+
 ## Ideas for later
 
-- swisstopo also publishes bridge models (`ch.swisstopo.swisstlm3d.3d`) and trees (`ch.swisstopo.vegetation.3d`) as 3D Tiles.
+- Facade detail on the house models (windows as a texture or colour bands), since swisstopo has no textured models.
+- Named landmarks as star spots (Zytglogge, Münster, Bundeshaus).

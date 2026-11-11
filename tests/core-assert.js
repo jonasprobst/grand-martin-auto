@@ -34,3 +34,28 @@ const f = C.localFrame(46.948, 7.4474), e = C.ecef(46.949, 7.449, 540), q = f(e[
 assert(Math.abs(q[1] - 540) < 0.1 && Math.abs(q[0] - 121.8) < 2 && Math.abs(q[2] + 111.2) < 2, 'local frame is east, up, south in metres: ' + q);
 
 console.log('core tests passed');
+
+// parseTrees reads an i3dm tile wrapped in a cmpt bundle
+{
+  const ft = Buffer.from(JSON.stringify({ INSTANCES_LENGTH: 2, POSITION: { byteOffset: 0 }, SCALE: { byteOffset: 24 } }).padEnd(96, ' '));
+  const bin = Buffer.alloc(32); [1, 2, 3, 4, 5, 6].forEach((v, i) => bin.writeFloatLE(v, i * 4)); bin.writeFloatLE(12, 24); bin.writeFloatLE(20, 28);
+  const head = Buffer.alloc(32); head.write('i3dm'); head.writeUInt32LE(1, 4); head.writeUInt32LE(32 + ft.length + bin.length, 8); head.writeUInt32LE(ft.length, 12); head.writeUInt32LE(bin.length, 16);
+  const inner = Buffer.concat([head, ft, bin]), ch = Buffer.alloc(16); ch.write('cmpt'); ch.writeUInt32LE(1, 4); ch.writeUInt32LE(16 + inner.length * 2, 8); ch.writeUInt32LE(2, 12);
+  const all = Buffer.concat([ch, inner, inner]), t = C.parseTrees(all.buffer.slice(all.byteOffset, all.byteOffset + all.length));
+  assert.deepStrictEqual(t.pos, [1, 2, 3, 4, 5, 6, 1, 2, 3, 4, 5, 6]);
+  assert.deepStrictEqual(t.size, [12, 20, 12, 20]);
+}
+// realTrees drops trees on roads and outside the map
+{
+  const road = w.roads[0].pts[0];
+  const rt = C.realTrees(w, { pos: [road[0], 0, road[1], 9999, 0, 0, 33, 0, 47], size: [10, 10, 16] }, 100);
+  assert(rt.length <= 1 && rt.every(t => t[2] === 2), 'only the tree off the road and inside the map can stay: ' + JSON.stringify(rt));
+}
+// bridgeParts gives a high deck piers and leaves a deck on the ground alone
+{
+  const pts = []; for (let i = 0; i <= 12; i++) pts.push([i * 8, 0]);
+  const hi = C.bridgeParts({ roads: [{ pts: pts, w: 8, ys: pts.map(() => 20) }], heightAt: () => 0 });
+  const lo = C.bridgeParts({ roads: [{ pts: pts, w: 8, ys: pts.map(() => 1.2) }], heightAt: () => 0 });
+  assert(hi.pos.length > 0 && lo.pos.length === 0 && hi.pos.length === hi.col.length);
+}
+console.log('tree and bridge tests passed');

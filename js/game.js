@@ -27,6 +27,7 @@
   ];
   const SWISS_BUILDINGS = 'https://3d.geo.admin.ch/ch.swisstopo.swissbuildings3d.3d/v1/tileset.json';
   const DRACO_PATH = 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/libs/draco/';
+  const SWISS_TREES = 'https://3d.geo.admin.ch/ch.swisstopo.vegetation.3d/v1/tileset.json';
   const SWISS_TERRAIN = 'https://3d.geo.admin.ch/ch.swisstopo.terrain.3d/v1/';
   const CHEERS = ['NICE!', 'ZOOM!', 'GOT IT!', 'YES!', 'WOW!', 'SUPER!'];
 
@@ -177,120 +178,167 @@
     }
   }
 
-  // ---------- swisstopo building models (3D Tiles) ----------
+  // ---------- swisstopo 3D Tiles: houses and trees ----------
+  const errText = (e, n) => String((e && e.message) || e).slice(0, n || 120);
+  const within = (job, sec) => { job.catch(() => {}); return Promise.race([job, new Promise((res, rej) => setTimeout(() => rej(new Error('took longer than ' + sec + ' seconds')), sec * 1000))]); };
+
+  // Walks a tileset down to the tiles that touch the play area. Returns [{ url, T }].
+  async function walkTiles(root, lat, lon, R, note) {
+    const box = { lat: lat, lon: lon, R: R }, contents = [];
+    const readSet = async (url, T, refine, depth) => {
+      if (depth > 8 || note.tilesets >= 60) return;
+      note.tilesets++;
+      const r = await fetch(url);
+      if (!r.ok) throw new Error('tileset answered ' + r.status);
+      const j = await r.json(), base = r.url || url, pending = [];
+      const visit = (t, T, refine) => {
+        if (!t) return;
+        const TT = t.transform ? (T ? C.mul4(T, t.transform) : t.transform) : T;
+        if (!C.volumeNear(t.boundingVolume, TT, box)) return;
+        const ref = String(t.refine || refine || 'REPLACE').toUpperCase(), kids = t.children || [];
+        const c = t.content && (t.content.uri || t.content.url);
+        if (c) {
+          const u = new URL(c, base).href;
+          if (/\.json(\?|$)/i.test(c)) pending.push(readSet(u, TT, ref, depth + 1));
+          else if (ref === 'ADD' || !kids.length) contents.push({ url: u, T: TT });
+        }
+        note.refine = ref;
+        for (const k of kids) visit(k, TT, ref);
+      };
+      visit(j.root, T, refine);
+      await Promise.all(pending);
+    };
+    await readSet(root, null, null, 0);
+    return contents;
+  }
+
+  let gltfLoader = null;
+  // Loads b3dm tiles. Returns [{ prims: [{ raw: model x y z, batch, index, color }], rtc, T }].
+  async function loadB3dm(contents, note) {
+    if (!THREE.GLTFLoader || !THREE.DRACOLoader) throw new Error('the model loader scripts did not load');
+    if (!gltfLoader) {
+      const draco = new THREE.DRACOLoader();
+      draco.setDecoderPath(DRACO_PATH);
+      gltfLoader = new THREE.GLTFLoader();
+      gltfLoader.setDRACOLoader(draco);
+    }
+    const parse = glb => new Promise((res, rej) => gltfLoader.parse(glb, '', res, rej));
+    const v = new THREE.Vector3(), loaded = [];
+    let failed = 0, lastErr = '';
+    const one = async c => {
+      try {
+        const r = await fetch(c.url);
+        if (!r.ok) throw new Error('tile answered ' + r.status);
+        const b = C.parseB3dm(await gunzipIfNeeded(await r.arrayBuffer()));
+        if (b.version !== 2) throw new Error('glTF version ' + b.version + ' is not supported');
+        const g = await parse(b.glb), prims = [];
+        const rtc = b.rtc || (g.parser && g.parser.json && g.parser.json.extensions && g.parser.json.extensions.CESIUM_RTC && g.parser.json.extensions.CESIUM_RTC.center) || null;
+        g.scene.updateMatrixWorld(true);
+        g.scene.traverse(o => {
+          if (!o.isMesh || !o.geometry || !o.geometry.attributes.position) return;
+          const pa = o.geometry.attributes.position, raw = new Float64Array(pa.count * 3);
+          for (let i = 0; i < pa.count; i++) { v.fromBufferAttribute(pa, i).applyMatrix4(o.matrixWorld); raw[i * 3] = v.x; raw[i * 3 + 1] = v.y; raw[i * 3 + 2] = v.z; }
+          const ba = o.geometry.attributes._batchid || o.geometry.attributes.batchid || null, mc = o.material && o.material.color;
+          prims.push({ raw: raw, batch: ba ? ba.array : null, index: o.geometry.index ? o.geometry.index.array : null, color: mc ? [mc.r, mc.g, mc.b] : [1, 1, 1] });
+          o.geometry.dispose();
+        });
+        if (prims.length) loaded.push({ prims: prims, rtc: rtc, T: c.T });
+      } catch (e) { failed++; lastErr = errText(e, 90); }
+    };
+    for (let i = 0; i < contents.length; i += 8) await Promise.all(contents.slice(i, i + 8).map(one));
+    if (!loaded.length) throw new Error('all ' + contents.length + ' tiles failed: ' + lastErr);
+    if (failed) note.failed = failed + ' tiles failed (' + lastErr + ')';
+    return loaded;
+  }
+  // glTF says y is up; check against the data, since a wrong guess would tip every model on its side
+  function upAxis(loaded, frame, note) {
+    const range = [0, 0];
+    for (const yUp of [1, 0]) for (const t of loaded.slice(0, 6)) for (const p of t.prims) {
+      const r = C.modelToLocal(Float64Array.from(p.raw), !!yUp, t.rtc, t.T, frame);
+      range[yUp] = Math.max(range[yUp], r[1] - r[0]);
+    }
+    note.up = (range[1] <= range[0] ? 'y' : 'z') + ' (height span ' + Math.round(range[1]) + ' vs ' + Math.round(range[0]) + ' m)';
+    return range[1] <= range[0];
+  }
+
   async function loadModels(w, lat, lon) {
     const note = { tilesets: 0, tiles: 0, meshes: 0, verts: 0, all: 0 };
     w.models = null;
     let gaveUp = false;
     try {
-      if (!THREE.GLTFLoader || !THREE.DRACOLoader) throw new Error('the model loader scripts did not load');
-      const job = (async () => {
-      const box = { lat: lat, lon: lon, R: HALF + 150 }, contents = [];
-      const readSet = async (url, T, refine, depth) => {
-        if (depth > 8 || note.tilesets >= 60) return;
-        note.tilesets++;
-        const r = await fetch(url);
-        if (!r.ok) throw new Error('tileset answered ' + r.status);
-        const j = await r.json(), base = r.url || url;
-        if (j.asset && j.asset.gltfUpAxis) note.upAxis = j.asset.gltfUpAxis;
-        const pending = [];
-        const visit = (t, T, refine) => {
-          if (!t) return;
-          const TT = t.transform ? (T ? C.mul4(T, t.transform) : t.transform) : T;
-          if (!C.volumeNear(t.boundingVolume, TT, box)) return;
-          const ref = String(t.refine || refine || 'REPLACE').toUpperCase(), kids = t.children || [];
-          const c = t.content && (t.content.uri || t.content.url);
-          if (c) {
-            const u = new URL(c, base).href;
-            if (/\.json(\?|$)/i.test(c)) pending.push(readSet(u, TT, ref, depth + 1));
-            else if (ref === 'ADD' || !kids.length) contents.push({ url: u, T: TT });
-          }
-          note.refine = ref;
-          for (const k of kids) visit(k, TT, ref);
-        };
-        visit(j.root, T, refine);
-        await Promise.all(pending);
-      };
-      await readSet(SWISS_BUILDINGS, null, null, 0);
-      if (!contents.length) throw new Error('no building tiles found for this area');
-      if (contents.length > 400) contents.length = 400;
-      note.tiles = contents.length;
-      note.first = contents[0].url.split('/').slice(-3).join('/');
-
-      const draco = new THREE.DRACOLoader();
-      draco.setDecoderPath(DRACO_PATH);
-      const loader = new THREE.GLTFLoader();
-      loader.setDRACOLoader(draco);
-      const parse = glb => new Promise((res, rej) => loader.parse(glb, '', res, rej));
-      const v = new THREE.Vector3(), loaded = [];
-      let failed = 0, lastErr = '';
-      const one = async c => {
-        try {
-          const r = await fetch(c.url);
-          if (!r.ok) throw new Error('tile answered ' + r.status);
-          const b = C.parseB3dm(await gunzipIfNeeded(await r.arrayBuffer()));
-          if (b.version !== 2) throw new Error('glTF version ' + b.version + ' is not supported');
-          const g = await parse(b.glb), prims = [];
-          const rtc = b.rtc || (g.parser && g.parser.json && g.parser.json.extensions && g.parser.json.extensions.CESIUM_RTC && g.parser.json.extensions.CESIUM_RTC.center) || null;
-          g.scene.updateMatrixWorld(true);
-          g.scene.traverse(o => {
-            if (!o.isMesh || !o.geometry || !o.geometry.attributes.position) return;
-            const pa = o.geometry.attributes.position, raw = new Float64Array(pa.count * 3);
-            for (let i = 0; i < pa.count; i++) { v.fromBufferAttribute(pa, i).applyMatrix4(o.matrixWorld); raw[i * 3] = v.x; raw[i * 3 + 1] = v.y; raw[i * 3 + 2] = v.z; }
-            const ba = o.geometry.attributes._batchid || o.geometry.attributes.batchid || null;
-            prims.push({ raw: raw, batch: ba ? ba.array : null, index: o.geometry.index ? o.geometry.index.array : null });
-            o.geometry.dispose();
-          });
-          if (prims.length) loaded.push({ prims: prims, rtc: rtc, T: c.T });
-        } catch (e) { failed++; lastErr = String((e && e.message) || e).slice(0, 90); }
-      };
-      for (let i = 0; i < contents.length; i += 8) await Promise.all(contents.slice(i, i + 8).map(one));
-      draco.dispose();
-      if (!loaded.length) throw new Error('all ' + contents.length + ' building tiles failed: ' + lastErr);
-      if (failed) note.failed = failed + ' tiles failed (' + lastErr + ')';
-
-      // glTF says y is up; check against the data, since a wrong guess would tip every house on its side
-      const frame = C.localFrame(lat, lon), range = [0, 0];
-      for (const yUp of [1, 0]) for (const t of loaded.slice(0, 6)) for (const p of t.prims) {
-        const r = C.modelToLocal(Float64Array.from(p.raw), !!yUp, t.rtc, t.T, frame);
-        range[yUp] = Math.max(range[yUp], r[1] - r[0]);
-      }
-      const yUp = range[1] <= range[0];
-      note.up = (yUp ? 'y' : 'z') + ' (height span ' + Math.round(range[1]) + ' vs ' + Math.round(range[0]) + ' m)';
-
-      const ter = w.terrain, base = ter ? ter.base : 0, group = [], seats = [];
-      let ids = 0, tileNo = 0;
-      const keep = HALF + 130; // houses further out are hidden by the fog anyway
-      for (const t of loaded) {
-        tileNo++;
-        t.prims = t.prims.map(p => {
-          C.modelToLocal(p.raw, yUp, t.rtc, t.T, frame);
-          note.all += p.raw.length / 3;
-          const c = C.cropPrim({ pos: p.raw, batch: p.batch, index: p.index }, keep);
-          p.raw = null;
-          return c;
-        }).filter(p => p.index.length);
-        if (!t.prims.length) continue;
-        if (t.prims.every(p => p.batch)) ids++;
-        const st = C.seatBuildings(t.prims, w.heightAt || (() => 0), base);
-        seats.push(st.median);
-        for (const p of t.prims) { group.push({ pos: new Float32Array(p.pos), batch: p.batch, index: p.index, tile: tileNo }); note.meshes++; note.verts += p.pos.length / 3; }
-        t.prims = null;
-      }
-      if (!group.length) throw new Error('the building tiles held no houses for this area');
-      seats.sort((a, b) => a - b);
-      note.seat = (ids ? 'each house set on the ground' : 'no house ids, true heights used') + ', typical shift ' + Math.round(seats[seats.length >> 1] + base) + ' m';
-      if (gaveUp) return;
-      w.models = group;
-      w.modelInfo = 'swisstopo 3D, ' + note.tiles + ' tiles (' + note.refine + ', first ' + note.first + '), ' + note.meshes + ' meshes, ' +
-        Math.round(note.verts / 1000) + 'k of ' + Math.round(note.all / 1000) + 'k points kept, up axis ' + note.up + ', ' + note.seat + (note.failed ? ', ' + note.failed : '');
-      })();
-      job.catch(() => {});
-      await Promise.race([job, new Promise((res, rej) => setTimeout(() => rej(new Error('took longer than 75 seconds')), 75000))]);
+      await within((async () => {
+        const contents = await walkTiles(SWISS_BUILDINGS, lat, lon, HALF + 150, note);
+        if (!contents.length) throw new Error('no building tiles found for this area');
+        if (contents.length > 400) contents.length = 400;
+        note.tiles = contents.length;
+        note.first = contents[0].url.split('/').slice(-3).join('/');
+        const loaded = await loadB3dm(contents, note);
+        const frame = C.localFrame(lat, lon), yUp = upAxis(loaded, frame, note);
+        const ter = w.terrain, base = ter ? ter.base : 0, group = [], seats = [];
+        let ids = 0, tileNo = 0;
+        const keep = HALF + 130; // houses further out are hidden by the fog anyway
+        for (const t of loaded) {
+          tileNo++;
+          t.prims = t.prims.map(p => {
+            C.modelToLocal(p.raw, yUp, t.rtc, t.T, frame);
+            note.all += p.raw.length / 3;
+            const c = C.cropPrim({ pos: p.raw, batch: p.batch, index: p.index }, keep);
+            p.raw = null;
+            return c;
+          }).filter(p => p.index.length);
+          if (!t.prims.length) continue;
+          if (t.prims.every(p => p.batch)) ids++;
+          const st = C.seatBuildings(t.prims, w.heightAt || (() => 0), base);
+          seats.push(st.median);
+          for (const p of t.prims) { group.push({ pos: new Float32Array(p.pos), batch: p.batch, index: p.index, tile: tileNo }); note.meshes++; note.verts += p.pos.length / 3; }
+          t.prims = null;
+        }
+        if (!group.length) throw new Error('the building tiles held no houses for this area');
+        seats.sort((a, b) => a - b);
+        note.seat = (ids ? 'each house set on the ground' : 'no house ids, true heights used') + ', typical shift ' + Math.round(seats[seats.length >> 1] + base) + ' m';
+        if (gaveUp) return;
+        w.models = group;
+        w.modelInfo = 'swisstopo 3D, ' + note.tiles + ' tiles (' + note.refine + ', first ' + note.first + '), ' + note.meshes + ' meshes, ' +
+          Math.round(note.verts / 1000) + 'k of ' + Math.round(note.all / 1000) + 'k points kept, up axis ' + note.up + ', ' + note.seat + (note.failed ? ', ' + note.failed : '');
+      })(), 75);
     } catch (e) {
       gaveUp = true;
       console.warn('building models failed', e);
-      w.modelInfo = 'simple blocks, swisstopo models failed after ' + note.tilesets + ' tileset files and ' + note.tiles + ' tiles: ' + String((e && e.message) || e).slice(0, 140);
+      w.modelInfo = 'simple blocks, swisstopo models failed after ' + note.tilesets + ' tileset files and ' + note.tiles + ' tiles: ' + errText(e, 140);
+    }
+  }
+
+  // Real tree positions and heights. Without them, trees are scattered in the parks.
+  async function loadTrees(w, lat, lon) {
+    const note = { tilesets: 0 };
+    w.treePts = null;
+    let gaveUp = false;
+    try {
+      await within((async () => {
+        const contents = await walkTiles(SWISS_TREES, lat, lon, HALF + 60, note);
+        if (!contents.length) throw new Error('no tree tiles found for this area');
+        if (contents.length > 300) contents.length = 300;
+        const frame = C.localFrame(lat, lon), pos = [], size = [];
+        let failed = 0;
+        const one = async c => {
+          try {
+            const r = await fetch(c.url);
+            if (!r.ok) throw new Error('tile answered ' + r.status);
+            const t = C.parseTrees(await gunzipIfNeeded(await r.arrayBuffer())), q = Float64Array.from(t.pos);
+            C.modelToLocal(q, false, null, c.T, frame);
+            for (let i = 0; i < t.size.length; i++) { pos.push(q[i * 3], q[i * 3 + 1], q[i * 3 + 2]); size.push(t.size[i]); }
+          } catch (e) { failed++; }
+        };
+        for (let i = 0; i < contents.length; i += 12) await Promise.all(contents.slice(i, i + 12).map(one));
+        if (!size.length) throw new Error('the ' + contents.length + ' tree tiles held no trees');
+        if (gaveUp) return;
+        w.treePts = { pos: pos, size: size };
+        w.treeInfo = 'swisstopo, ' + contents.length + ' tiles' + (failed ? ' (' + failed + ' failed)' : '');
+      })(), 30);
+    } catch (e) {
+      gaveUp = true;
+      console.warn('trees failed', e);
+      w.treeInfo = 'scattered in parks, swisstopo trees failed: ' + errText(e);
     }
   }
 
@@ -321,15 +369,15 @@
         w = C.practiceTown();
         if (location.hash === '#terrain-test') { // practice streets on Bern's real hills, with Bern's real houses
           await loadTerrain(w, 46.9480, 7.4474);
-          await loadModels(w, 46.9480, 7.4474);
+          await Promise.all([loadModels(w, 46.9480, 7.4474), loadTrees(w, 46.9480, 7.4474)]);
         }
       } else {
         showLoading(place.name, 'Fetching the real streets and buildings');
         w = await loadWorld(place.lat, place.lon);
         $('#load-text').textContent = 'Fetching the hills';
         await loadTerrain(w, place.lat, place.lon);
-        $('#load-text').textContent = 'Fetching the houses';
-        await loadModels(w, place.lat, place.lon);
+        $('#load-text').textContent = 'Fetching the houses and trees';
+        await Promise.all([loadModels(w, place.lat, place.lon), loadTrees(w, place.lat, place.lon)]);
         $('#load-text').textContent = 'Building the city';
         await new Promise(r => setTimeout(r, 30));
         w.name = 'Bern, ' + place.name;
@@ -467,20 +515,43 @@
         worldGroup.add(new THREE.Mesh(g, new THREE.MeshLambertMaterial({ vertexColors: true, map: winTex, side: THREE.DoubleSide })));
       }
     }
-    const trees = C.placeTrees(w, C.mulberry32(3));
+    if (w.bridges) { // piers and arches under the bridge decks
+      const bp = C.bridgeParts(w);
+      if (bp.pos.length) {
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.Float32BufferAttribute(bp.pos, 3));
+        g.setAttribute('color', new THREE.Float32BufferAttribute(bp.col, 3));
+        worldGroup.add(new THREE.Mesh(g, flatMat));
+      }
+    }
+    let trees = null;
+    if (w.treePts) {
+      try { trees = C.realTrees(w, w.treePts, 4000); w.treeInfo += ', ' + trees.length + ' of ' + w.treePts.size.length + ' trees shown'; }
+      catch (e) { console.warn('placing the real trees failed', e); w.treeInfo = 'scattered in parks, placing swisstopo trees failed: ' + errText(e); }
+      w.treePts = null;
+    }
+    if (!trees || !trees.length) trees = C.placeTrees(w, C.mulberry32(3)).map((t, i) => [t[0], t[1], t[2], i % 4 ? 0 : 1]);
     if (trees.length) {
-      const top = new THREE.InstancedMesh(new THREE.ConeGeometry(2.6, 6, 7), new THREE.MeshLambertMaterial({ color: 0x35b455 }), trees.length);
-      const trunk = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.4, 0.5, 2.4, 6), new THREE.MeshLambertMaterial({ color: 0x8a5a3c }), trees.length);
-      const m = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), sc = new THREE.Vector3();
+      const GREENS = [0x35b455, 0x2e9e4f, 0x4cc267, 0x3fae3f, 0x6fbf4a];
+      const cone = new THREE.InstancedMesh(new THREE.ConeGeometry(2.6, 6, 7), new THREE.MeshLambertMaterial({ color: 0xffffff }), trees.length);
+      const ball = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(3, 0), new THREE.MeshPhongMaterial({ color: 0xffffff, flatShading: true, shininess: 0, specular: 0x000000 }), trees.length);
+      const trunk = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.4, 0.5, 2.4, 5, 1, true), new THREE.MeshLambertMaterial({ color: 0x8a5a3c }), trees.length);
+      const m = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), sc = new THREE.Vector3(), c = new THREE.Color();
+      let nc = 0, nb = 0;
       trees.forEach((t, i) => {
+        const gy = w.heightAt(t[0], t[1]), top = t[3] ? ball : cone, k = t[3] ? nb++ : nc++;
         sc.set(t[2], t[2], t[2]);
-        const gy = w.heightAt(t[0], t[1]);
-        p.set(t[0], gy + 5 * t[2], t[1]); m.compose(p, q, sc); top.setMatrixAt(i, m);
         p.set(t[0], gy + 1.2 * t[2], t[1]); m.compose(p, q, sc); trunk.setMatrixAt(i, m);
+        if (t[3]) sc.set(t[2] * 1.05, t[2] * 0.95, t[2] * 1.05);
+        p.set(t[0], gy + (t[3] ? 4.9 : 5) * t[2], t[1]); m.compose(p, q, sc); top.setMatrixAt(k, m);
+        top.setColorAt(k, c.setHex(GREENS[Math.abs(Math.round(t[0] * 3 + t[1] * 5)) % GREENS.length]));
       });
-      top.instanceMatrix.needsUpdate = true; trunk.instanceMatrix.needsUpdate = true;
-      top.frustumCulled = false; trunk.frustumCulled = false;
-      worldGroup.add(top, trunk);
+      cone.count = nc; ball.count = nb;
+      for (const o of [cone, ball, trunk]) {
+        o.instanceMatrix.needsUpdate = true; if (o.instanceColor) o.instanceColor.needsUpdate = true;
+        o.frustumCulled = false;
+        if (o.count) worldGroup.add(o);
+      }
     }
     scene.add(worldGroup);
     buildMini(w);
@@ -586,7 +657,7 @@
     camera.position.set(s.x - Math.sin(s.h) * 30, s.y + 22, s.z - Math.cos(s.h) * 30);
     $('#sign-city').textContent = w.name;
     $('#dbg').textContent = 'Map: ' + (w.src || 'built in') + '. Terrain: ' + (w.terrainInfo || 'flat') + '. Bridges: ' + (w.bridges || 0) +
-      '. Houses: ' + (w.modelInfo || 'simple blocks') + '.';
+      '. Houses: ' + (w.modelInfo || 'simple blocks') + '. Trees: ' + (w.treeInfo || 'scattered in parks') + '.';
     $('#menu').hidden = true; $('#hud').hidden = false; $('#pause').hidden = true; $('#win').hidden = true;
     paused = false; running = true; last = 0;
     toast('FIND THE STARS!');

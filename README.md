@@ -8,6 +8,8 @@ A 3D driving game for kids. Pick a car, pick a spot in Bern, and drive around it
 - The ground has real hills from swisstopo's terrain service. The ground is levelled along each road, and bridges span the valleys.
 - Streets, footprints, parks and water come from swisstopo's base vector tiles. If those fail, the game falls back to OpenFreeMap (OpenStreetMap data) and says so on the pause screen.
 - Houses are swisstopo's swissBUILDINGS3D models with real roof shapes, each set on the game's ground. If the models fail, houses are drawn as simple blocks from the footprints.
+- Trees stand where swisstopo's vegetation data has real trees, at their real heights. If that fails, trees are scattered in the parks.
+- Bridges stand on piers with arched sides.
 - The pause screen shows which map and terrain source loaded, or why terrain failed.
 - Works with touch buttons on phones and tablets, and with arrow keys or WASD on a computer.
 - No build step: `index.html`, `js/core.js` (map data, geometry, car physics) and `js/game.js` (rendering, sound, game flow). three.js loads from cdnjs, its glTF and Draco loaders from jsDelivr.

@@ -16,6 +16,7 @@ streets, and advances through levels. HUD: minimap, street-name sign, arrow to t
 3. Houses: swissBUILDINGS3D 3D Tiles. `loadModels` walks `tileset.json`, loads `.b3dm` tiles with GLTFLoader and
    DRACOLoader, converts Earth-centred coordinates to local metres and seats each house on the ground
    (`C.modelToLocal`, `C.seatBuildings`). Fallback: extruded blocks from the footprints (`C.buildBuildings`).
+   Trees load at the same time from swisstopo's vegetation tiles (`loadTrees`); fallback: trees scattered in parks.
 4. `C.indexWorld` adds lookups (`nearestRoad`, `hitBuilding`, `groundAt`), then `buildWorld` creates the meshes.
 
 Flat layers (roads, parks, water) are cut along the terrain grid by `C.drapeFlat` so they lie exactly on the terrain
@@ -54,8 +55,8 @@ streets, which separates terrain and model problems from street-map problems.
 
 1. Get the owner's screenshots for bridges and for the swisstopo streets and houses; fix what they show.
 2. If `tileset.json` proves too large or slow, find the tile grid and request tiles directly, or cache the tile list.
-3. Possible later: swisstopo bridge models (`ch.swisstopo.swisstlm3d.3d`), trees (`ch.swisstopo.vegetation.3d`),
-   more Swiss cities, gravity on slopes, traffic.
+3. Possible later: facade detail on houses, landmarks, more Swiss cities, gravity on slopes, traffic.
+   Real trees and bridge piers are done; see step 3 in `docs/swisstopo-plan.md`.
 
 ## History in brief
 

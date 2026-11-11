@@ -311,6 +311,35 @@
     return { rtc: rtc, glb: buf.slice(at), version: dv.getUint32(at + 4, true) };
   }
 
+  // Reads tree positions from a vegetation tile (i3dm, or a cmpt bundle of them). Returns Earth-centred points
+  // { pos: [x, y, z, ...], size: [tree height in metres, ...] }. The tree model itself is not used.
+  function parseTrees(buf) {
+    const dv = new DataView(buf), u8 = new Uint8Array(buf), pos = [], size = [];
+    const read = (off, depth) => {
+      const magic = String.fromCharCode(u8[off], u8[off + 1], u8[off + 2], u8[off + 3]), len = dv.getUint32(off + 8, true);
+      if (magic === 'cmpt' && depth < 4) {
+        let o = off + 16;
+        for (let i = 0, n = dv.getUint32(off + 12, true); i < n && o + 12 <= u8.length; i++) o += read(o, depth + 1);
+      } else if (magic === 'i3dm') {
+        const ftj = dv.getUint32(off + 12, true), fb = off + 32 + ftj;
+        const ft = JSON.parse(new TextDecoder().decode(u8.subarray(off + 32, off + 32 + ftj)));
+        const n = ft.INSTANCES_LENGTH || 0, rtc = Array.isArray(ft.RTC_CENTER) ? ft.RTC_CENTER : [0, 0, 0];
+        const f = o => dv.getFloat32(o, true);
+        for (let i = 0; i < n; i++) {
+          if (ft.POSITION) { const o = fb + ft.POSITION.byteOffset + i * 12; pos.push(f(o) + rtc[0], f(o + 4) + rtc[1], f(o + 8) + rtc[2]); }
+          else if (ft.POSITION_QUANTIZED && ft.QUANTIZED_VOLUME_OFFSET && ft.QUANTIZED_VOLUME_SCALE) {
+            const o = fb + ft.POSITION_QUANTIZED.byteOffset + i * 6, qo = ft.QUANTIZED_VOLUME_OFFSET, qs = ft.QUANTIZED_VOLUME_SCALE;
+            for (let k = 0; k < 3; k++) pos.push(dv.getUint16(o + k * 2, true) / 65535 * qs[k] + qo[k] + rtc[k]);
+          } else break;
+          size.push(ft.SCALE ? f(fb + ft.SCALE.byteOffset + i * 4) : ft.SCALE_NON_UNIFORM ? f(fb + ft.SCALE_NON_UNIFORM.byteOffset + i * 12 + 4) : 10);
+        }
+      }
+      return len > 0 ? len : u8.length;
+    };
+    read(0, 0);
+    return { pos: pos, size: size };
+  }
+
   // Does a 3D Tiles bounding volume touch the play area? box = { lat, lon, R (metres) }; T = 4x4 column-major or null.
   function volumeNear(bv, T, box) {
     if (!bv) return true;
@@ -517,6 +546,36 @@
       pos.push(a[0], a0, a[1], b[0], b0, b[1], b[0], b1, b[1], a[0], a0, a[1], b[0], b1, b[1], a[0], a1, a[1]);
       for (let k = 0; k < 6; k++) col.push(c[0], c[1], c[2]);
     }
+  }
+
+  // What holds a bridge up: a pier every 24 m where the deck is well above the ground, and side walls that are deep
+  // at the piers and shallow between them, so the bridge reads as a row of arches. Needs w.heightAt (the terrain).
+  function bridgeParts(w) {
+    const pos = [], col = [], light = COL.wall, dark = [COL.wall[0] * 0.78, COL.wall[1] * 0.78, COL.wall[2] * 0.78];
+    const quad = (a, b, y0a, y0b, y1a, y1b, c) => {
+      pos.push(a[0], y0a, a[1], b[0], y0b, b[1], b[0], y1b, b[1], a[0], y0a, a[1], b[0], y1b, b[1], a[0], y1a, a[1]);
+      for (let k = 0; k < 6; k++) col.push(c[0], c[1], c[2]);
+    };
+    for (const r of w.roads) {
+      if (!r.ys || r.w < 3) continue;
+      const n = r.pts.length, e = edges(r.pts, r.w + 3.2), clear = [];
+      for (let i = 0; i < n; i++) clear.push(r.ys[i] - 1 - w.heightAt(r.pts[i][0], r.pts[i][1]));
+      const depth = i => { const u = (i % 3) / 3; return Math.max(0, Math.min(5, clear[i] * 0.6)) * (1 - 3.6 * u * (1 - u)); };
+      for (let i = 0; i < n - 1; i++) {
+        if (clear[i] < 1.5 || clear[i + 1] < 1.5) continue;
+        for (const S of e) quad(S[i], S[i + 1], r.ys[i] - 1 - depth(i), r.ys[i + 1] - 1 - depth(i + 1), r.ys[i] - 1, r.ys[i + 1] - 1, light);
+      }
+      for (let i = 3; i < n - 1; i += 3) {
+        if (clear[i] < 2.5) continue;
+        const a = r.pts[i - 1], b = r.pts[i + 1], len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1, dx = (b[0] - a[0]) / len * 1.2, dz = (b[1] - a[1]) / len * 1.2;
+        const L = e[0][i], R = e[1][i], c = [[L[0] - dx, L[1] - dz], [L[0] + dx, L[1] + dz], [R[0] + dx, R[1] + dz], [R[0] - dx, R[1] - dz]];
+        let foot = Infinity;
+        for (const q of c) foot = Math.min(foot, w.heightAt(q[0], q[1]));
+        const top = r.ys[i] - 1;
+        for (let k = 0; k < 4; k++) quad(c[k], c[(k + 1) % 4], foot - 1, foot - 1, top, top, k % 2 ? light : dark);
+      }
+    }
+    return { pos: pos, col: col };
   }
 
   function disc(x, z, r, y, c, pos, col) {
@@ -1005,6 +1064,26 @@
     return out;
   }
 
+  // Real trees from swisstopo. pts = { pos: local x y z list, size: heights in metres }. Keeps trees inside the map
+  // that do not stand on a road or in a house, thinned evenly to at most `max`. Returns [x, z, scale, kind];
+  // kind 0 is a pointed tree, 1 a round one. A tree of scale 1 is 8 m tall.
+  function realTrees(w, pts, max) {
+    const all = [], L = w.half + 60;
+    for (let i = 0; i < pts.size.length; i++) {
+      const x = pts.pos[i * 3], z = pts.pos[i * 3 + 2], h = pts.size[i];
+      if (!(Math.abs(x) <= L && Math.abs(z) <= L) || !(h > 0)) continue;
+      const nr = w.nearestRoad(x, z);
+      if (nr && nr.d < 2.5) continue;
+      if (w.hitBuilding(x, z)) continue;
+      const k = Math.abs(Math.round(x * 7.3 + z * 13.7)) % 10;
+      all.push([x, z, Math.max(0.45, Math.min(3.2, h / 8)), k < 3 ? 0 : 1]);
+    }
+    if (all.length <= max) return all;
+    const out = [], step = all.length / max;
+    for (let i = 0; i < max; i++) out.push(all[Math.floor(i * step)]);
+    return out;
+  }
+
   const MAXV = 25; // m/s on a street = 90 km/h
 
   // One physics step. s = {x, z, h, v, steer}; input values are 0 or 1.
@@ -1047,7 +1126,7 @@
     indexWorld: indexWorld, pickSpawn: pickSpawn, placeStars: placeStars, placeTrees: placeTrees,
     stepCar: stepCar, MAXV: MAXV, decodeMVT: decodeMVT, decodeQM: decodeQM, qmTileList: qmTileList, qmAddTriangles: qmAddTriangles, rasterTIN: rasterTIN,
     finishTerrain: finishTerrain, burnRoads: burnRoads, scale: scale, ecef: ecef, geodetic: geodetic, localFrame: localFrame,
-    parseB3dm: parseB3dm, volumeNear: volumeNear, mul4: mul4, modelToLocal: modelToLocal, seatBuildings: seatBuildings, cropPrim: cropPrim, makeTerrain: makeTerrain, drapeFlat: drapeFlat, applyTerrain: applyTerrain, tileList: tileList, worldFromTiles: worldFromTiles
+    parseB3dm: parseB3dm, volumeNear: volumeNear, mul4: mul4, modelToLocal: modelToLocal, seatBuildings: seatBuildings, bridgeParts: bridgeParts, parseTrees: parseTrees, realTrees: realTrees, cropPrim: cropPrim, makeTerrain: makeTerrain, drapeFlat: drapeFlat, applyTerrain: applyTerrain, tileList: tileList, worldFromTiles: worldFromTiles
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.GMA = api;
 })(this);
