@@ -192,6 +192,10 @@ body:not(.touch) #pad { display: none; }
   #menu::before, .wheel { animation: none; }
   #confetti { display: none; }
 }
+.ver { display: flex; gap: 12px; align-items: center; justify-content: center; flex-wrap: wrap; }
+.mini-btn { font: inherit; font-weight: 700; color: inherit; background: transparent; border: 2px solid currentColor; border-radius: 999px; padding: 6px 14px; min-height: 36px; cursor: pointer; }
+.mini-btn:disabled { opacity: 0.6; cursor: default; }
+.mini-btn.new { color: #ffd23f; }
 </style>
 </head>
 <body>
@@ -252,6 +256,7 @@ body:not(.touch) #pad { display: none; }
     <p class="best" id="best" hidden></p>
     <p class="keys" id="keys">Drive with <kbd>&larr;</kbd> <kbd>&uarr;</kbd> <kbd>&darr;</kbd> <kbd>&rarr;</kbd> or <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd>. <kbd>Space</kbd> brakes, <kbd>H</kbd> honks, <kbd>P</kbd> pauses.</p>
     <p class="fine">Streets, houses and terrain &copy; <a href="https://www.swisstopo.admin.ch" target="_blank" rel="noopener">swisstopo</a>.</p>
+    <p class="fine ver"><span id="version">Version unknown</span> <button type="button" class="mini-btn" id="btn-reload">Reload game</button></p>
   </div>
 </main>
 
@@ -297,6 +302,7 @@ body:not(.touch) #pad { display: none; }
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/DRACOLoader.js"></script>
+<script src="js/version.js"></script>
 <script src="js/core.js"></script>
 <script src="js/game.js"></script>
 </body>

@@ -914,8 +914,26 @@
     $('#btn-practice').addEventListener('click', () => { $('#loading').hidden = true; go({ practice: true, name: 'Practice Town' }); });
   }
 
+  // ---------- version and reload ----------
+  // Browsers keep old copies of the game files. Reload fetches each file past the cache first, then reloads the page.
+  const FILES = ['./', 'js/version.js', 'js/core.js', 'js/game.js'];
+  function initVersion() {
+    const mine = window.GMA_VERSION || 'unknown', label = $('#version'), btn = $('#btn-reload');
+    label.textContent = 'Version ' + mine;
+    btn.addEventListener('click', async () => {
+      btn.disabled = true; btn.textContent = 'Reloading';
+      try { await Promise.all(FILES.map(u => fetch(u, { cache: 'reload' }))); } catch (e) { /* offline: a plain reload is all that is left */ }
+      location.reload();
+    });
+    fetch('js/version.js', { cache: 'no-store' }).then(r => (r.ok ? r.text() : '')).then(t => {
+      const m = /GMA_VERSION\s*=\s*'([^']+)'/.exec(t);
+      if (m && m[1] !== mine) { label.textContent = 'Version ' + mine + ', newer: ' + m[1]; btn.textContent = 'Get new version'; btn.classList.add('new'); }
+    }).catch(() => {});
+  }
+
   C.dev = () => ({ scene: scene, camera: camera, renderer: renderer, car: s, world: world, stars: stars }); // for automated tests
   buildMenu();
   bindInput();
+  initVersion();
   setSound(soundOn);
 })();

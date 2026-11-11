@@ -18,6 +18,8 @@ Live at https://jonasprobst.github.io/grand-martin-auto/ (GitHub Pages serves th
 
 ## Rules for this project
 
+- Before every publish, change the version in `js/version.js` (date plus a counter). The title screen shows it and
+  offers the newer one when the published copy differs.
 - Publish by pushing the same commit to `main` and `gh-pages`: `git push origin main && git push origin main:gh-pages`.
 - Keep `core.js` free of DOM and three.js so it stays testable in Node. Put new logic there when possible.
 - Every network source must fail soft: the game falls back (flat ground, simple block houses, fallback map) and
