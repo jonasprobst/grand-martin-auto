@@ -11,6 +11,12 @@
     };
   }
 
+  // Metres per degree of longitude and latitude at a given latitude (WGS84 ellipsoid).
+  function scale(lat) {
+    const p = lat * Math.PI / 180;
+    return [111412.84 * Math.cos(p) - 93.5 * Math.cos(3 * p) + 0.118 * Math.cos(5 * p), 111132.92 - 559.82 * Math.cos(2 * p) + 1.175 * Math.cos(4 * p)];
+  }
+
   // highway type -> [width in metres, kind]  kind 1 = normal street, 2 = service lane, 3 = pedestrian
   const ROAD = {
     motorway: [14, 1], trunk: [12, 1], primary: [11, 1], secondary: [10, 1], tertiary: [9, 1],
@@ -22,7 +28,7 @@
   const WOOD = { forest: 1, wood: 1, scrub: 1 };
 
   function overpassQuery(lat, lon, half) {
-    const dLat = half / 110540, dLon = half / (111320 * Math.cos(lat * Math.PI / 180));
+    const sc = scale(lat), dLat = half / sc[1], dLon = half / sc[0];
     const bb = [lat - dLat, lon - dLon, lat + dLat, lon + dLon].map(v => v.toFixed(6)).join(',');
     const hw = Object.keys(ROAD).join('|');
     return '[out:json][timeout:25];(' +
@@ -42,7 +48,7 @@
   }
 
   function parseOSM(json, lat0, lon0, half) {
-    const kx = 111320 * Math.cos(lat0 * Math.PI / 180), kz = 110540;
+    const sc = scale(lat0), kx = sc[0], kz = sc[1];
     const w = { half: half, roads: [], buildings: [], areas: [], rivers: [] };
     const els = (json && json.elements) || [];
     for (const el of els) {
@@ -145,7 +151,7 @@
   }
 
   function tileList(lat, lon, half, z) {
-    const n = Math.pow(2, z), dLat = half / 110540, dLon = half / (111320 * Math.cos(lat * Math.PI / 180));
+    const sc = scale(lat), n = Math.pow(2, z), dLat = half / sc[1], dLon = half / sc[0];
     const tx = l => Math.floor((l + 180) / 360 * n);
     const ty = l => { const r = l * Math.PI / 180; return Math.floor((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * n); };
     const out = [];
@@ -159,7 +165,7 @@
 
   // tiles: [{z, x, y, layers}] with layers from decodeMVT
   function worldFromTiles(tiles, lat0, lon0, half) {
-    const kx = 111320 * Math.cos(lat0 * Math.PI / 180), kz = 110540, lim = half + 150;
+    const sc = scale(lat0), kx = sc[0], kz = sc[1], lim = half + 150;
     const w = { half: half, roads: [], buildings: [], areas: [], rivers: [] };
     const names = new Map(), NC = 30, nkey = (a, b) => a * 100003 + b;
     for (const t of tiles) {
@@ -254,6 +260,121 @@
       r.name = best;
     }
     return w;
+  }
+
+  // ---------- 3D building models (Cesium 3D Tiles, b3dm) ----------
+  const WGS_A = 6378137, WGS_E2 = 6.69437999014e-3;
+  function ecef(lat, lon, h) {
+    const p = lat * Math.PI / 180, l = lon * Math.PI / 180, N = WGS_A / Math.sqrt(1 - WGS_E2 * Math.sin(p) * Math.sin(p));
+    return [(N + h) * Math.cos(p) * Math.cos(l), (N + h) * Math.cos(p) * Math.sin(l), (N * (1 - WGS_E2) + h) * Math.sin(p)];
+  }
+  function geodetic(X, Y, Z) {
+    const l = Math.atan2(Y, X), pp = Math.hypot(X, Y);
+    let p = Math.atan2(Z, pp * (1 - WGS_E2)), h = 0;
+    for (let i = 0; i < 6; i++) {
+      const N = WGS_A / Math.sqrt(1 - WGS_E2 * Math.sin(p) * Math.sin(p));
+      h = pp / Math.cos(p) - N;
+      p = Math.atan2(Z, pp * (1 - WGS_E2 * N / (N + h)));
+    }
+    return [p * 180 / Math.PI, l * 180 / Math.PI, h];
+  }
+  // Earth-centred coordinates -> the game's local metres: [x east, y up, z south]
+  function localFrame(lat0, lon0) {
+    const O = ecef(lat0, lon0, 0), p = lat0 * Math.PI / 180, l = lon0 * Math.PI / 180;
+    const sp = Math.sin(p), cp = Math.cos(p), sl = Math.sin(l), cl = Math.cos(l);
+    return function (X, Y, Z) {
+      const dx = X - O[0], dy = Y - O[1], dz = Z - O[2];
+      return [-sl * dx + cl * dy, cp * cl * dx + cp * sl * dy + sp * dz, sp * cl * dx + sp * sl * dy - cp * dz];
+    };
+  }
+
+  // b3dm container -> { rtc: [x, y, z] or null, glb: ArrayBuffer, version: glTF version }
+  function parseB3dm(buf) {
+    const dv = new DataView(buf), u8 = new Uint8Array(buf);
+    const magic = String.fromCharCode(u8[0], u8[1], u8[2], u8[3]);
+    if (magic === 'glTF') return { rtc: null, glb: buf, version: dv.getUint32(4, true) };
+    if (magic !== 'b3dm') throw new Error('not a b3dm tile (starts with "' + magic + '")');
+    let ftj = dv.getUint32(12, true), ftb = dv.getUint32(16, true), btj = dv.getUint32(20, true), btb = dv.getUint32(24, true), head = 28;
+    if (btj >= 570425344) { head = 20; btj = ftb; btb = 0; ftj = 0; ftb = 0; }        // very old header layouts
+    else if (btb >= 570425344) { head = 24; btj = ftj; btb = ftb; ftj = 0; ftb = 0; }
+    let rtc = null;
+    if (ftj) {
+      try {
+        const j = JSON.parse(new TextDecoder().decode(u8.subarray(head, head + ftj)));
+        if (Array.isArray(j.RTC_CENTER) && j.RTC_CENTER.length === 3) rtc = j.RTC_CENTER;
+      } catch (e) { /* no usable feature table */ }
+    }
+    let at = head + ftj + ftb + btj + btb;
+    const isGlb = i => u8[i] === 0x67 && u8[i + 1] === 0x6c && u8[i + 2] === 0x54 && u8[i + 3] === 0x46;
+    if (!isGlb(at)) { at = -1; for (let i = head; i < u8.length - 12; i++) if (isGlb(i)) { at = i; break; } }
+    if (at < 0) throw new Error('b3dm tile holds no glTF model');
+    return { rtc: rtc, glb: buf.slice(at), version: dv.getUint32(at + 4, true) };
+  }
+
+  // Does a 3D Tiles bounding volume touch the play area? box = { lat, lon, R (metres) }; T = 4x4 column-major or null.
+  function volumeNear(bv, T, box) {
+    if (!bv) return true;
+    const sc = scale(box.lat), d2r = Math.PI / 180;
+    if (bv.region) {
+      const r = bv.region, dLat = box.R / sc[1] * d2r, dLon = box.R / sc[0] * d2r, la = box.lat * d2r, lo = box.lon * d2r;
+      return r[0] <= lo + dLon && r[2] >= lo - dLon && r[1] <= la + dLat && r[3] >= la - dLat;
+    }
+    let c = null, rad = 0;
+    if (bv.box) { const b = bv.box; c = [b[0], b[1], b[2]]; rad = Math.hypot(b[3], b[4], b[5]) + Math.hypot(b[6], b[7], b[8]) + Math.hypot(b[9], b[10], b[11]); }
+    else if (bv.sphere) { c = [bv.sphere[0], bv.sphere[1], bv.sphere[2]]; rad = bv.sphere[3]; }
+    if (!c) return true;
+    if (T) c = [T[0] * c[0] + T[4] * c[1] + T[8] * c[2] + T[12], T[1] * c[0] + T[5] * c[1] + T[9] * c[2] + T[13], T[2] * c[0] + T[6] * c[1] + T[10] * c[2] + T[14]];
+    const g = geodetic(c[0], c[1], c[2]);
+    return Math.abs((g[1] - box.lon) * sc[0]) <= box.R + rad && Math.abs((g[0] - box.lat) * sc[1]) <= box.R + rad;
+  }
+  function mul4(a, b) { // column-major 4x4
+    const o = new Array(16);
+    for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) o[c * 4 + r] = a[r] * b[c * 4] + a[4 + r] * b[c * 4 + 1] + a[8 + r] * b[c * 4 + 2] + a[12 + r] * b[c * 4 + 3];
+    return o;
+  }
+
+  // Model vertices (already in the glTF scene's world space, flat x y z list) -> local metres, in place.
+  // yUp: glTF convention (y up), turned to z up as 3D Tiles asks. Returns the height range, used to sanity-check yUp.
+  function modelToLocal(pos, yUp, rtc, T, frame) {
+    let lo = Infinity, hi = -Infinity;
+    for (let i = 0; i < pos.length; i += 3) {
+      let x = pos[i], y = pos[i + 1], z = pos[i + 2];
+      if (yUp) { const t = y; y = -z; z = t; }
+      if (rtc) { x += rtc[0]; y += rtc[1]; z += rtc[2]; }
+      if (T) { const a = T[0] * x + T[4] * y + T[8] * z + T[12], b = T[1] * x + T[5] * y + T[9] * z + T[13], c = T[2] * x + T[6] * y + T[10] * z + T[14]; x = a; y = b; z = c; }
+      const q = frame(x, y, z);
+      pos[i] = q[0]; pos[i + 1] = q[1]; pos[i + 2] = q[2];
+      if (q[1] < lo) lo = q[1]; if (q[1] > hi) hi = q[1];
+    }
+    return [lo, hi];
+  }
+
+  // Sets every building on the game's ground. prims: [{ pos: local x y z list, batch: id per vertex or null }] of one tile.
+  // With batch ids each building is moved on its own; without, the whole tile keeps its true height minus `base`.
+  function seatBuildings(prims, heightAt, base) {
+    const lows = new Map(), shifts = [];
+    let ids = true;
+    for (const p of prims) if (!p.batch) ids = false;
+    if (!ids) {
+      for (const p of prims) for (let i = 1; i < p.pos.length; i += 3) p.pos[i] -= base;
+      return { perBuilding: false, count: 0, median: -base };
+    }
+    for (const p of prims) for (let v = 0, i = 0; i < p.pos.length; i += 3, v++) {
+      const id = p.batch[v], y = p.pos[i + 1], cur = lows.get(id);
+      if (cur === undefined || y < cur) lows.set(id, y);
+    }
+    const ground = new Map();
+    for (const p of prims) for (let v = 0, i = 0; i < p.pos.length; i += 3, v++) {
+      const id = p.batch[v];
+      if (p.pos[i + 1] > lows.get(id) + 0.6) continue; // only the bottom ring of the building
+      const g = heightAt(p.pos[i], p.pos[i + 2]), cur = ground.get(id);
+      if (cur === undefined || g < cur) ground.set(id, g);
+    }
+    const dy = new Map();
+    for (const e of lows) { const d = ground.get(e[0]) - 0.3 - e[1]; dy.set(e[0], d); shifts.push(d); }
+    for (const p of prims) for (let v = 0, i = 0; i < p.pos.length; i += 3, v++) p.pos[i + 1] += dy.get(p.batch[v]);
+    shifts.sort((a, b) => a - b);
+    return { perBuilding: true, count: shifts.length, median: shifts.length ? shifts[shifts.length >> 1] : 0 };
   }
 
   // A made-up grid town, used when no map server can be reached.
@@ -508,14 +629,14 @@
 
   // Tiles of the global-geodetic TMS scheme (two tiles at zoom 0, y counted from the south).
   function qmTileList(lat, lon, R, z) {
-    const size = 180 / Math.pow(2, z), dLat = R / 110540, dLon = R / (111320 * Math.cos(lat * Math.PI / 180)), out = [];
+    const sc = scale(lat), size = 180 / Math.pow(2, z), dLat = R / sc[1], dLon = R / sc[0], out = [];
     for (let x = Math.floor((lon - dLon + 180) / size); x <= Math.floor((lon + dLon + 180) / size); x++)
       for (let y = Math.floor((lat - dLat + 90) / size); y <= Math.floor((lat + dLat + 90) / size); y++) out.push({ z: z, x: x, y: y });
     return out;
   }
   function qmAddTriangles(tris, dec, t, lat0, lon0) {
     const size = 180 / Math.pow(2, t.z), west = -180 + t.x * size, south = -90 + t.y * size;
-    const kx = 111320 * Math.cos(lat0 * Math.PI / 180), kz = 110540;
+    const sc = scale(lat0), kx = sc[0], kz = sc[1];
     for (let i = 0; i < dec.idx.length; i++) {
       const k = dec.idx[i];
       tris.push((west + dec.u[k] * size - lon0) * kx, -(south + dec.v[k] * size - lat0) * kz, dec.h[k]);
@@ -900,7 +1021,8 @@
     triangulate: triangulate, polyArea: polyArea, buildFlat: buildFlat, buildBuildings: buildBuildings,
     indexWorld: indexWorld, pickSpawn: pickSpawn, placeStars: placeStars, placeTrees: placeTrees,
     stepCar: stepCar, MAXV: MAXV, decodeMVT: decodeMVT, decodeQM: decodeQM, qmTileList: qmTileList, qmAddTriangles: qmAddTriangles, rasterTIN: rasterTIN,
-    finishTerrain: finishTerrain, burnRoads: burnRoads, makeTerrain: makeTerrain, drapeFlat: drapeFlat, applyTerrain: applyTerrain, tileList: tileList, worldFromTiles: worldFromTiles
+    finishTerrain: finishTerrain, burnRoads: burnRoads, scale: scale, ecef: ecef, geodetic: geodetic, localFrame: localFrame,
+    parseB3dm: parseB3dm, volumeNear: volumeNear, mul4: mul4, modelToLocal: modelToLocal, seatBuildings: seatBuildings, makeTerrain: makeTerrain, drapeFlat: drapeFlat, applyTerrain: applyTerrain, tileList: tileList, worldFromTiles: worldFromTiles
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.GMA = api;
 })(this);

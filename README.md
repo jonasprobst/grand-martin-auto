@@ -6,11 +6,12 @@ A 3D driving game for kids. Pick a car, pick a spot in Bern, and drive around it
 
 - Bern only for now, with five starting spots. Each loads about 1 km around it.
 - The ground has real hills from swisstopo's terrain service. The ground is levelled along each road, and bridges span the valleys.
-- Streets, buildings, parks and water still come from OpenStreetMap, as vector tiles from OpenFreeMap. Moving these to swisstopo data is the next step (see `docs/swisstopo-plan.md`).
+- Streets, footprints, parks and water come from swisstopo's base vector tiles. If those fail, the game falls back to OpenFreeMap (OpenStreetMap data) and says so on the pause screen.
+- Houses are swisstopo's swissBUILDINGS3D models with real roof shapes, each set on the game's ground. If the models fail, houses are drawn as simple blocks from the footprints.
 - The pause screen shows which map and terrain source loaded, or why terrain failed.
 - Works with touch buttons on phones and tablets, and with arrow keys or WASD on a computer.
-- No build step: `index.html`, `js/core.js` (map data, geometry, car physics) and `js/game.js` (rendering, sound, game flow). three.js loads from cdnjs.
+- No build step: `index.html`, `js/core.js` (map data, geometry, car physics) and `js/game.js` (rendering, sound, game flow). three.js loads from cdnjs, its glTF and Draco loaders from jsDelivr.
 
 Run locally with any static server, for example `python3 -m http.server`, then open http://localhost:8000.
 
-Map tiles: OpenFreeMap © OpenMapTiles. Data from OpenStreetMap. Terrain in Switzerland © swisstopo.
+Streets, houses and terrain © swisstopo. Fallback map tiles: OpenFreeMap © OpenMapTiles, data from OpenStreetMap.

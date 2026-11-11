@@ -1,8 +1,10 @@
 # Plan: swisstopo terrain and buildings for Bern
 
-Status: step 1 (terrain) is written but was built without access to swisstopo's servers, so it is only tested against synthetic tiles. Step 2 (building models) not started. Agreed order: terrain first, then building models. Bern (46.9480, 7.4474) is the test map.
+Status: terrain is confirmed working in Bern. Streets from swisstopo vector tiles and the building models are written but were built without access to swisstopo's servers; they are tested only against synthetic data and mocks. The pause screen reports what loaded.
 
 ## Data sources (open, no key)
+
+- Streets: base vector tiles in the OpenMapTiles layout, `https://vectortiles.geo.admin.ch/tiles/ch.swisstopo.base.vt/v1.0.0/tiles.json`.
 
 - Terrain: Cesium quantized-mesh tiles, `https://3d.geo.admin.ch/ch.swisstopo.terrain.3d/v1/layer.json`,
   tiles at `.../v1/{z}/{x}/{y}.terrain` (TMS, global-geodetic profile, lat/lon).
@@ -36,3 +38,7 @@ Open the game with `#terrain-test` at the end of the address and pick Practice T
 The agent workspace needs network access to: `3d.geo.admin.ch`, `tiles.openfreemap.org`, `cdnjs.cloudflare.com`,
 `cdn.jsdelivr.net`. With those allowed, load the game in headless Chrome and check real screenshots of Bern.
 Logic tests for `js/core.js` run in Node without a browser.
+
+## Ideas for later
+
+- swisstopo also publishes bridge models (`ch.swisstopo.swisstlm3d.3d`) and trees (`ch.swisstopo.vegetation.3d`) as 3D Tiles.

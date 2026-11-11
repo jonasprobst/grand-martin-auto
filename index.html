@@ -105,6 +105,7 @@ button { cursor: pointer; }
 .best { margin: 0; text-align: center; font-weight: 700; color: var(--sun); }
 .fine { margin: 0; text-align: center; font-size: 13px; color: #b9b3e6; }
 .fine a { color: var(--sky); }
+#dbg { text-align: left; font-size: 11px; line-height: 1.35; max-height: 38vh; overflow-y: auto; overflow-wrap: anywhere; -webkit-user-select: text; user-select: text; }
 .keys { margin: 0; text-align: center; font-size: 14px; color: #d6d1f5; }
 kbd { font-family: var(--font-body); font-weight: 700; background: var(--paper); color: var(--ink); border-radius: 6px; padding: 1px 6px; border-bottom: 3px solid #b9b3a0; }
 
@@ -250,7 +251,7 @@ body:not(.touch) #pad { display: none; }
 
     <p class="best" id="best" hidden></p>
     <p class="keys" id="keys">Drive with <kbd>&larr;</kbd> <kbd>&uarr;</kbd> <kbd>&darr;</kbd> <kbd>&rarr;</kbd> or <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd>. <kbd>Space</kbd> brakes, <kbd>H</kbd> honks, <kbd>P</kbd> pauses.</p>
-    <p class="fine">Streets and buildings: <a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> &copy; <a href="https://openmaptiles.org" target="_blank" rel="noopener">OpenMapTiles</a>. Data from <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>. Terrain &copy; <a href="https://www.swisstopo.admin.ch" target="_blank" rel="noopener">swisstopo</a>.</p>
+    <p class="fine">Streets, houses and terrain &copy; <a href="https://www.swisstopo.admin.ch" target="_blank" rel="noopener">swisstopo</a>.</p>
   </div>
 </main>
 
@@ -294,6 +295,8 @@ body:not(.touch) #pad { display: none; }
 <div id="confetti" aria-hidden="true"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/DRACOLoader.js"></script>
 <script src="js/core.js"></script>
 <script src="js/game.js"></script>
 </body>
