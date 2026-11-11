@@ -563,19 +563,74 @@
     return { pos: op, col: oc };
   }
 
-  // Puts the world on the terrain: stores the height lookup and gives bridges a deck that spans between their two ends.
+  function resample(pts, step) {
+    const o = [pts[0]];
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1], b = pts[i], steps = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / step));
+      for (let k = 1; k <= steps; k++) o.push([a[0] + (b[0] - a[0]) * k / steps, a[1] + (b[1] - a[1]) * k / steps]);
+    }
+    return o;
+  }
+
+  // Levels the ground along every road, like a road builder would: each road gets a smooth height profile
+  // along its centre line, and the terrain within a few metres is pulled to that height. Bridges are left out.
+  function burnRoads(w, t) {
+    const G = t.G, R = t.R, n = t.n, h = t.h, H = t.heightAt;
+    const ends = []; // bridge end points: the road arriving there must not sag toward the valley
+    for (const r of w.roads) if (r.bridge) { ends.push(r.pts[0], r.pts[r.pts.length - 1]); }
+    const atBridge = p => ends.some(e => Math.hypot(e[0] - p[0], e[1] - p[1]) < 3);
+    const samples = [];
+    for (const r of w.roads) {
+      if (r.bridge || r.pts.length < 2) continue;
+      const P = resample(r.pts, 6), m = P.length, hs = P.map(p => H(p[0], p[1]));
+      const lift = (from, dir) => { // hold the last 18 m before a bridge at least as high as the road further back
+        let top = hs[from];
+        for (let k = 0; k < 4 && from + dir * k >= 0 && from + dir * k < m; k++) top = Math.max(top, hs[from + dir * k]);
+        for (let k = 0; k < 3 && from + dir * k >= 0 && from + dir * k < m; k++) hs[from + dir * k] = top;
+      };
+      if (atBridge(P[0])) lift(0, 1);
+      if (atBridge(P[m - 1])) lift(m - 1, -1);
+      for (let pass = 0; pass < 8 && m > 2; pass++) {
+        let prev = hs[0];
+        for (let i = 1; i < m - 1; i++) { const cur = hs[i]; hs[i] = (prev + 2 * cur + hs[i + 1]) / 4; prev = cur; }
+      }
+      for (let i = 0; i < m; i++) samples.push([P[i][0], P[i][1], hs[i], r.w / 2]);
+    }
+    const sum = new Float32Array(n * n), ws = new Float32Array(n * n), blend = new Float32Array(n * n);
+    for (const q of samples) {
+      const full = q[3] + 8, reach = q[3] + 20;
+      const i0 = Math.max(0, Math.ceil((q[0] - reach + R) / G)), i1 = Math.min(n - 1, Math.floor((q[0] + reach + R) / G));
+      const j0 = Math.max(0, Math.ceil((q[1] - reach + R) / G)), j1 = Math.min(n - 1, Math.floor((q[1] + reach + R) / G));
+      for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+        const d = Math.hypot(-R + i * G - q[0], -R + j * G - q[1]);
+        if (d > reach) continue;
+        const k = j * n + i, wgt = 1 / (d * d + 4), b = d <= full ? 1 : (reach - d) / (reach - full);
+        sum[k] += wgt * q[2]; ws[k] += wgt; if (b > blend[k]) blend[k] = b;
+      }
+    }
+    for (let k = 0; k < h.length; k++) if (ws[k] > 0) h[k] += blend[k] * (sum[k] / ws[k] - h[k]);
+  }
+
+  // Puts the world on the terrain: levels the roads, stores the height lookup and gives bridges a deck
+  // that spans between their two ends.
   function applyTerrain(w, t) {
     w.terrain = t; w.heightAt = t.heightAt;
-    const H = t.heightAt, br = w.roads.filter(r => r.bridge && r.pts.length > 1);
-    if (!br.length) return w;
-    for (const r of br) { // short steps, so the deck can follow the ground where it touches it
-      const o = [r.pts[0]];
-      for (let i = 1; i < r.pts.length; i++) {
-        const a = r.pts[i - 1], b = r.pts[i], steps = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / 8));
-        for (let k = 1; k <= steps; k++) o.push([a[0] + (b[0] - a[0]) * k / steps, a[1] + (b[1] - a[1]) * k / steps]);
-      }
-      r.pts = o;
+    const H = t.heightAt;
+    // a short piece of road between two bridge pieces (on a pier, say) belongs to the bridge
+    const bend = [];
+    for (const r of w.roads) if (r.bridge && r.pts.length > 1) bend.push(r.pts[0], r.pts[r.pts.length - 1]);
+    const touches = p => bend.some(e => Math.hypot(e[0] - p[0], e[1] - p[1]) < 3);
+    for (const r of w.roads) {
+      if (r.bridge || r.pts.length < 2 || !bend.length) continue;
+      let len = 0;
+      for (let i = 1; i < r.pts.length; i++) len += Math.hypot(r.pts[i][0] - r.pts[i - 1][0], r.pts[i][1] - r.pts[i - 1][1]);
+      if (len < 80 && touches(r.pts[0]) && touches(r.pts[r.pts.length - 1])) r.bridge = true;
     }
+    const br = w.roads.filter(r => r.bridge && r.pts.length > 1);
+    for (const r of br) r.pts = resample(r.pts, 8); // short steps, so the deck can follow the ground where it touches it
+    burnRoads(w, t);
+    w.bridges = br.length;
+    if (!br.length) return w;
     const nodes = new Map();
     const node = p => {
       const key = Math.round(p[0]) + ',' + Math.round(p[1]);
@@ -588,18 +643,33 @@
       r.nodes = r.pts.map(node);
       for (let i = 1; i < r.pts.length; i++) link(r.nodes[i - 1], r.nodes[i], Math.hypot(r.pts[i][0] - r.pts[i - 1][0], r.pts[i][1] - r.pts[i - 1][1]));
     }
-    // a loose end that lies on another bridge piece (map tiles overlap a little) is joined to it instead of touching down
+    // a loose end that lies on another bridge piece (map tiles overlap by up to 50 m) is joined to it instead of touching down
     for (const r of br) for (const end of [r.nodes[0], r.nodes[r.nodes.length - 1]]) {
       if (end.nb.length !== 1) continue;
-      let best = null, bd = 3.5;
+      let best = null, bd = 3;
       for (const o of br) {
         if (o === r) continue;
-        for (const nd of o.nodes) { const d = Math.hypot(nd.p[0] - end.p[0], nd.p[1] - end.p[1]); if (d < bd && nd !== end) { bd = d; best = nd; } }
+        for (let i = 0; i < o.pts.length - 1; i++) {
+          const a = o.pts[i], b = o.pts[i + 1], dx = b[0] - a[0], dz = b[1] - a[1], L = dx * dx + dz * dz;
+          let tt = L ? ((end.p[0] - a[0]) * dx + (end.p[1] - a[1]) * dz) / L : 0;
+          tt = tt < 0 ? 0 : tt > 1 ? 1 : tt;
+          const d = Math.hypot(end.p[0] - a[0] - dx * tt, end.p[1] - a[1] - dz * tt);
+          if (d < bd) { bd = d; best = [o.nodes[i], o.nodes[i + 1]]; }
+        }
       }
-      if (best) link(end, best, bd);
+      if (best) for (const nd of best) link(end, nd, Math.hypot(nd.p[0] - end.p[0], nd.p[1] - end.p[1]));
     }
     const all = Array.from(nodes.values());
-    for (const nd of all) nd.fixed = nd.nb.length === 1;
+    for (const r of br) { // where a bridge lands, use the higher of the ground at its end and just beyond it
+      const m = r.pts.length;
+      for (const e of [[r.nodes[0], r.pts[0], r.pts[1]], [r.nodes[m - 1], r.pts[m - 1], r.pts[m - 2]]]) {
+        const nd = e[0];
+        if (nd.nb.length !== 1) continue;
+        const dx = e[1][0] - e[2][0], dz = e[1][1] - e[2][1], L = Math.hypot(dx, dz) || 1;
+        for (const k of [6, 12]) nd.h = Math.max(nd.h, H(e[1][0] + dx / L * k, e[1][1] + dz / L * k));
+        nd.fixed = true;
+      }
+    }
     const iters = Math.min(40000, 200 + all.length * all.length * 2);
     for (let it = 0; it < iters; it++) {
       let move = 0;
@@ -830,7 +900,7 @@
     triangulate: triangulate, polyArea: polyArea, buildFlat: buildFlat, buildBuildings: buildBuildings,
     indexWorld: indexWorld, pickSpawn: pickSpawn, placeStars: placeStars, placeTrees: placeTrees,
     stepCar: stepCar, MAXV: MAXV, decodeMVT: decodeMVT, decodeQM: decodeQM, qmTileList: qmTileList, qmAddTriangles: qmAddTriangles, rasterTIN: rasterTIN,
-    finishTerrain: finishTerrain, makeTerrain: makeTerrain, drapeFlat: drapeFlat, applyTerrain: applyTerrain, tileList: tileList, worldFromTiles: worldFromTiles
+    finishTerrain: finishTerrain, burnRoads: burnRoads, makeTerrain: makeTerrain, drapeFlat: drapeFlat, applyTerrain: applyTerrain, tileList: tileList, worldFromTiles: worldFromTiles
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.GMA = api;
 })(this);

@@ -5,26 +5,18 @@
   const $ = s => document.querySelector(s);
   const HALF = 550; // the loaded map is a square of 2 * HALF metres
 
+  // Bern only for now. Each spot is the centre of a loaded square of about 1.1 km.
   const CITIES = [
-    { name: 'Bern', lat: 46.9480, lon: 7.4474 },
-    { name: 'Berlin', lat: 52.5163, lon: 13.3777 },
-    { name: 'Paris', lat: 48.8738, lon: 2.2950 },
-    { name: 'London', lat: 51.5079, lon: -0.1281 },
-    { name: 'New York', lat: 40.7580, lon: -73.9855 },
-    { name: 'Rome', lat: 41.8958, lon: 12.4826 },
-    { name: 'Tokyo', lat: 35.6595, lon: 139.7005 },
-    { name: 'Zürich', lat: 47.3697, lon: 8.5392 },
-    { name: 'San Francisco', lat: 37.8021, lon: -122.4187 }
+    { name: 'Altstadt', lat: 46.9480, lon: 7.4474 },
+    { name: 'Bärenpark', lat: 46.9478, lon: 7.4590 },
+    { name: 'Bahnhof', lat: 46.9488, lon: 7.4391 },
+    { name: 'Kirchenfeld', lat: 46.9433, lon: 7.4495 },
+    { name: 'Wankdorf', lat: 46.9630, lon: 7.4650 }
   ];
   const CARS = [
     { id: 'red', name: 'Rocket', c: '#ff3b3b' }, { id: 'yellow', name: 'Banana', c: '#ffd23f' },
     { id: 'blue', name: 'Splash', c: '#2f8bff' }, { id: 'green', name: 'Frog', c: '#2ee6a6' },
     { id: 'pink', name: 'Bubble', c: '#ff5fa8' }, { id: 'white', name: 'Ghost', c: '#f4f4fb' }
-  ];
-  const OVERPASS = [
-    'https://overpass-api.de/api/interpreter',
-    'https://overpass.private.coffee/api/interpreter',
-    'https://maps.mail.ru/osm/tools/overpass/api/interpreter'
   ];
   const TILEJSON = 'https://tiles.openfreemap.org/planet';
   const TILE_FALLBACK = 'https://tiles.openfreemap.org/planet/20251217_001001_pt/{z}/{x}/{y}.pbf';
@@ -74,15 +66,6 @@
     p.type = 'button'; p.className = 'btn pink'; p.textContent = 'Practice Town';
     p.addEventListener('click', () => go({ practice: true, name: 'Practice Town' }));
     cities.appendChild(p);
-    $('#city').value = store.get('gma-last', '');
-    $('#search').addEventListener('submit', e => {
-      e.preventDefault();
-      const q = $('#city').value.trim();
-      if (!q) { $('#city').focus(); return; }
-      store.set('gma-last', q);
-      $('#city').blur();
-      go({ query: q, name: q });
-    });
     showBest();
   }
   function showBest() {
@@ -99,29 +82,6 @@
       if (!r.ok) throw new Error('http ' + r.status);
       return await r.json();
     } finally { clearTimeout(t); }
-  }
-  async function geocode(q) {
-    let failed = 0;
-    try {
-      const j = await fetchJSON('https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=' + encodeURIComponent(q), null, 12000);
-      if (j && j[0]) return { name: j[0].name || String(j[0].display_name || q).split(',')[0], lat: +j[0].lat, lon: +j[0].lon };
-    } catch (e) { failed++; }
-    try {
-      const j = await fetchJSON('https://photon.komoot.io/api/?limit=1&q=' + encodeURIComponent(q), null, 12000);
-      const f = j && j.features && j.features[0];
-      if (f) return { name: (f.properties && f.properties.name) || q, lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0] };
-    } catch (e) { failed++; }
-    throw new Error(failed === 2 ? 'net' : 'notfound');
-  }
-  // Overpass: ask every server at once and take the first good answer.
-  async function fetchOSM(lat, lon) {
-    const body = 'data=' + encodeURIComponent(C.overpassQuery(lat, lon, HALF));
-    const ask = async url => {
-      const j = await fetchJSON(url, { method: 'POST', body: body, headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }, 25000);
-      if (!j || !j.elements || !j.elements.length) throw new Error('empty');
-      return j;
-    };
-    return Promise.any(OVERPASS.map(ask));
   }
   // Vector tiles from OpenFreeMap: fast, hosted on a CDN, same OpenStreetMap data.
   async function fetchTiles(lat, lon) {
@@ -143,18 +103,11 @@
     return C.worldFromTiles(tiles, lat, lon, HALF);
   }
   async function loadWorld(lat, lon) {
-    let reached = false;
-    try {
-      const w = await fetchTiles(lat, lon);
-      if (w.roads.length >= 4) { w.src = 'OpenFreeMap'; return w; }
-      reached = true;
-    } catch (e) { console.warn('tiles failed', e); }
-    try {
-      const w = C.parseOSM(await fetchOSM(lat, lon), lat, lon, HALF);
-      if (w.roads.length >= 4) { w.src = 'Overpass'; return w; }
-      reached = true;
-    } catch (e) { console.warn('overpass failed', e); }
-    throw new Error(reached ? 'nostreets' : 'net');
+    let w;
+    try { w = await fetchTiles(lat, lon); } catch (e) { console.warn('tiles failed', e); throw new Error('net'); }
+    if (w.roads.length < 4) throw new Error('nostreets');
+    w.src = 'OpenFreeMap';
+    return w;
   }
 
   // ---------- terrain (swisstopo, Switzerland only for now) ----------
@@ -236,17 +189,13 @@
         w = C.practiceTown();
         if (location.hash === '#terrain-test') await loadTerrain(w, 46.9480, 7.4474); // practice streets on Bern's real hills
       } else {
-        if (place.query) {
-          showLoading('Searching', 'Looking for ' + place.query);
-          place = await geocode(place.query);
-        }
         showLoading(place.name, 'Fetching the real streets and buildings');
         w = await loadWorld(place.lat, place.lon);
         $('#load-text').textContent = 'Fetching the hills';
         await loadTerrain(w, place.lat, place.lon);
         $('#load-text').textContent = 'Building the city';
         await new Promise(r => setTimeout(r, 30));
-        w.name = place.name;
+        w.name = 'Bern, ' + place.name;
       }
       C.indexWorld(w);
       buildWorld(w);
@@ -254,8 +203,7 @@
       $('#loading').hidden = true;
     } catch (e) {
       const m = e && e.message;
-      if (m === 'notfound') showError('Place not found', 'Check the spelling, or try the name of a bigger city nearby.');
-      else if (m === 'nostreets') showError('No streets there', 'That spot has no roads to drive on. Try another place.');
+      if (m === 'nostreets') showError('No streets there', 'That spot has no roads to drive on. Try another place.');
       else if (m === 'net') showError('Map did not load', 'The map server did not answer. Check the internet connection and try again, or drive in Practice Town.');
       else { console.error(e); showError('Something broke', 'The city could not be built. Try another place.'); }
     } finally { busy = false; }
@@ -460,7 +408,7 @@
     startLevel();
     camera.position.set(s.x - Math.sin(s.h) * 30, s.y + 22, s.z - Math.cos(s.h) * 30);
     $('#sign-city').textContent = w.name;
-    $('#dbg').textContent = 'Map: ' + (w.src || 'built in') + '. Terrain: ' + (w.terrainInfo || 'flat') + '.';
+    $('#dbg').textContent = 'Map: ' + (w.src || 'built in') + '. Terrain: ' + (w.terrainInfo || 'flat') + '. Bridges: ' + (w.bridges || 0) + '.';
     $('#menu').hidden = true; $('#hud').hidden = false; $('#pause').hidden = true; $('#win').hidden = true;
     paused = false; running = true; last = 0;
     toast('FIND THE STARS!');
